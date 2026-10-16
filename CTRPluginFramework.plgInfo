@@ -3,23 +3,25 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 8
+    Revision: 9
 
 Targets:
 
-Title: Collie Kart Portable P006.2
+Title: Collie Kart Portable P006.3
 
-Summary: MK7 read-only KDPadSetter chain discovery and 5s safety rehearsal
+Summary: MK7 opt-in per-frame native input hook with 3-frame accelerator experiment
 
 Description: |
-    P006.2 prepares for local, supervised native input control.
-    This preflight inspects the MK7 player-pad add-in chain
-    and candidate KDPadSetter fields without writing memory.
-    It retains P006.1 controller tracing, passive telemetry,
-    CSV flight recorder, and the five-second dry-run/abort test.
-    HID injection is disabled and no MK7 actuator is enabled.
-    Native press and release must be designed after hardware
-    calibration; this version cannot drive autonomously.
+    P006.3 experiments with a separately armed, 3-frame A input hook.
+    It searches a uniquely matching MK7 USA calcInput signature and
+    allows PASS-THROUGH mode to be tested before any input injection.
+    Actual A replacement requires 30 game frames, 10 physical A frames,
+    a 5-second dry-run completion and a separate physical-B abort.
+    The hook invokes the original input processing and otherwise
+    leaves all controller input unchanged. Its A override is limited
+    to 3 game frames and a 350ms deadline, with B abort.
+    Restored human control and hardware compatibility are UNVERIFIED.
+    No HID injection or autonomous driving. P006.2 is the fallback.
 
 Compatibility: Any
 
