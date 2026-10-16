@@ -1,8 +1,8 @@
-name: Collie Kart P006 First Contact Build
+name: Collie Kart P006.1 Read-only Input Trace Build
 
 on:
   push:
-    branches: [master, collie-kart-p005-sensor-fusion, collie-kart-p006-first-contact]
+    branches: [master, collie-kart-p005-sensor-fusion, collie-kart-p006-first-contact, collie-kart-p006-input-pipeline-trace]
   pull_request:
     branches: [master, collie-kart-p005-sensor-fusion]
   workflow_dispatch:
@@ -15,17 +15,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build P006
+      - name: Build P006.1
         run: make
       - name: Upload plugin 3GX
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P006-3GX
+          name: Collie-Kart-P0061-3GX
           path: CTRPluginFramework-BlankTemplate.3gx
           if-no-files-found: error
       - name: Upload debug ELF
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P006-ELF
+          name: Collie-Kart-P0061-ELF
           path: CTRPluginFramework-BlankTemplate.elf
           if-no-files-found: error

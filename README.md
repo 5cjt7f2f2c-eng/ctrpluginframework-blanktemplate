@@ -1,10 +1,43 @@
+# P006.1 — MK7 Native Input Pipeline Examination
+
+**This is a separate, opt-in READ-ONLY investigation build.** P006's unverified HID pulse menu option is inherited but **DO NOT USE IT** during this examination. This build **removes the P006 control-experiment menu options entirely** and only samples MK7's input data at ~10 Hz; the tested P006 branch and P005 fallback are unchanged.
+
+## Purpose
+
+P006's 80ms experimental HID pulse made three injection calls, while 43 follow-up reads reported no acceleration and no movement. But manual physical A produced seven out of seven matches at VehicleControl::m_controls bit0. To locate the missing input, this build samples in parallel:
+
+- CTRPF's physical A state
+- MK7 `KDPlayerPad::m_data_on_frame.m_buttons` (low bit of the u32 at `KDPad + 0x1C`)
+- MK7 raw physical-button snapshot at `KDPad + 0x2C`
+- MK7 active add-in at `KDPad + 0x18`, type at `+0x3C`, pause at `+0x3D`
+- `VehicleControl::m_controls` bit0 and `m_stick_x` (Vehicle +0xFC / +0x100)
+
+All the new accesses are **reads only** based on [mk7re/MK7-Memory](https://github.com/mk7re/MK7-Memory) and [mk7re/MK7-Emu-Scripts/KDPad.py](https://github.com/mk7re/MK7-Emu-Scripts/blob/master/KDPad.py). These pointers and states are not validated on the user's physical MK7 install yet.
+
+## On-3DS test (NO artificial driving)
+
+1. Back up working P006 `CollieKart.3gx` on iPhone. Download the successful **Collie-Kart-P0061-3GX** artifact and replace `SD:/luma/plugins/0004000000030800/CollieKart.3gx` after powering down the 3DS.
+2. Launch MK7, choose Toad Circuit Time Trial, and enable READY.
+3. In the CTRPF menu select **Toggle READ-ONLY input trace**, then **Start recording**. The experimental A-pulse and dry-run menu options are omitted in this diagnostic build.
+4. Close the plugin menu. Resume MK7 if its ordinary pause screen appears. Drive with physical A held about five seconds, release it and coast or stop briefly. Turn left/right with the Circle Pad for a few seconds.
+5. Open CTRPF, choose **Input pipeline diagnostics** and take a photo.
+6. Choose **Stop & Save CSV**, power off and transfer the next `SD:/CollieKart/session_NNN.csv` to your iPhone, then send it here.
+
+Look for `Physical A polls`, `KDPad A matches`, `Vehicle A matches`, and `All-three matches`. These should rise together when the structures are read correctly, but the actual value is the purpose of this test.
+
+The CSV appends `trace_valid,physical_a,kd_buttons_stick,kd_raw_buttons,kd_addin,kd_type,kd_paused,vehicle_controls,vehicle_steer_x,pad_polls,pad_fails,physical_a_polls,kd_a_matches,vehicle_a_matches,full_chain_matches`.
+
+If we see invalid pointers, freezes, or a slowdown, switch OFF the trace and restore prior P006/P005. **No native input writing is reachable from P006.1's menu; the background controller starts disarmed and has no arm command.**
+
+---
+
 # Collie Kart Portable — P006 First Contact
 
 **EXPERIMENTAL / DEVELOPMENT BUILD. BACK UP WORKING P005 BEFORE TESTING.**
 
 P006 inherits P001's bottom-left HUD, P002's live telemetry, P003's manual SD flight recorder, P004's provisional rewards and driving modes, and P005's fused boost-panel detection and brake-linked diagnostics.
 
-P006 adds **independent performance profiling** and a **gated single-use, local A-button injection experiment**. The real input test is unverified on the user's actual New 3DS. **It is not a learned or autonomous driver**, does not inject analog steering, and never writes MK7 process memory.
+The original P006 adds **independent performance profiling** and a **gated single-use, local A-button injection experiment**. The real input test is unverified on the user's actual New 3DS. **It is not a learned or autonomous driver**, does not inject analog steering, and never writes MK7 process memory.
 
 ## Important discovery: CTRPluginFramework's InjectKey
 
