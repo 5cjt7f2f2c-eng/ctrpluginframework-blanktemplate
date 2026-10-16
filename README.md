@@ -1,58 +1,87 @@
-# Collie Kart P006.2 — Native Acceleration Preflight
+# Collie Kart Portable P006.3 — Native 3-frame acceleration test
 
-> **Status: development-only READ-ONLY hardware probe, not the active native acceleration test.**
-> The actual input actuator is intentionally not armed because MK7's KDPadSetter activation/restoration semantics are still unknown. We will not risk an uncontrolled held accelerator by guessing.
+**HIGHLY EXPERIMENTAL. Code compiles, but there has been NO real New 3DS test of this native frame hook.**
+Keep a backup of the stable P006.2 3GX. If MK7 crashes, freezes, stops responding to normal inputs or accelerates unexpectedly: quit MK7 (or power off the console), disable Luma3DS 3GX Plugin Loader, and restore P006.2. The in-plugin emergency abort *cannot* recover a frozen game.
 
-## Why this version exists
+## Research and implementation
 
-- P006 (old HID method) made 3 experimental HID-A injection calls, but MK7's vehicle control bit remained off and the kart did not accelerate.
-- P006.1 hardware testing observed **43/43 physical-A → KDPad-A → VehicleControl-A matches**, and the user observed Circle Pad steering responding as expected. That validates the observable pathway, *not the ability to write to it*.
-- Reverse-engineered MK7 structures suggest `KDPad::m_pad_add_base` (offset `+0x14`), `m_pad_add_idx` (`+0x18`), `KDPadAddBase::m_prev_pad_add_base` (`+0x0C`) and `KDPadSetter` candidate fields at `+0x24` buttons, `+0x28` steering, `+0x30` disable and `+0x3C` update.
+This approach is **not** the original P006 HID Injector and **not** a speculative direct write into `KDPadSetter`. Two sources inform it:
 
-These fields come from [mk7re/MK7-Memory](https://github.com/mk7re/MK7-Memory), and **the setter fields are not proven to belong to a particular linked object on physical hardware**. An active pad mask containing `0x10` is not enough to identify the setter's memory location, switching sequence, or restoration mechanism.
+- [mk7re's simulated player](https://github.com/mk7re/mk7-llm-research/blob/master/docs/tooling/emulator/simulated-player.md), tested in an **EUR2 emulator**: it hooks `KDPadInputer::calcInput`, lets the game read physical inputs, then replaces the current frame's button/stick data. When its driving mode is disabled, the original game input passes through.
+- [MK7-Revolution's `KDPadInputer::calcInput` hook](https://github.com/Anto726/MK7-Revolution/blob/master/src/base/hooks/System/KDPadInputer/System_KDPadInputer_calcInput.cpp) and [signature](https://github.com/Anto726/MK7-Revolution/blob/master/src/base/pointers.cpp): evidence for locating and intercepting the relevant game function without a fixed EUR address.
+- [CTRPluginFramework hook API](https://github.com/Tekito-256/CTRPluginFramework/blob/master/Library/include/CTRPluginFramework/System/Hook.hpp): provides MITM and original-function handling.
 
-## New P006.2 functions
+The current 3GX attempts to locate the **unique 16-byte instruction signature** inside the running MK7 USA executable. If it finds zero or multiple occurrences, it refuses to install a hook. The original input function runs on every intercepted call. **Only** if the actual local player `KDPad` pointer matches, gameplay is not marked paused, and the user has explicitly armed an experimental pulse does the hook temporarily set bit 0 (A) in `KDPadDataOnFrame::m_buttons` for up to **three frame callbacks**. It leaves steering and all other buttons unchanged.
 
-1. **Toggle NATIVE setter preflight** — opt-in **read-only** sampling of the pad add-in chain at most 5 times/sec. Traverses at most four nodes and validates that every node backlinks to the same player pad and its current data-on-frame. Failed or cyclic chains are marked invalid.
-2. **Native setter diagnostics** — reports chain validity, add-in mask, number of chain nodes, number of merely *plausible* setter-like nodes, candidate button values and update flags, and count of structurally valid samples. `plausibleSetterNodes` **does not identify** a confirmed setter pointer.
-3. **Queue 5s SAFETY dry run** — pre-existing P006 countdown/release-interlock rehearsal with **no input injection or memory writes**. Physical B aborts after countdown begins. A/START can resume MK7 early in the five-second countdown.
-4. **ABORT safety dry run** — cancels the queued test.
-5. Existing P006.1 **Toggle READ-ONLY input trace**, **Input pipeline diagnostics**, **Start recording**, and **Stop & Save CSV** remain.
+This may or may not be compatible with this real USA New 3DS. A uniquely matching signature does not *guarantee* the actual hook is safe. The signature is an external project result and has not yet been validated on this console. Hooking modifies an instruction in the running game's text memory, unlike P006.2.
 
-P006.2 also **hard-disables the HID injection call** inherited from P006. No real actuator menu is exposed.
+**No HID key injection. No changes to vehicle physics, speed or reward system. No machine-learning controls or automatic steering.**
 
-## Installation (New 3DS, MK7 USA)
+## Installation
 
-1. Back up your successfully tested P006.1 `SD:/luma/plugins/0004000000030800/CollieKart.3gx` to your iPhone.
-2. Download the successful **Collie-Kart-P0062-3GX** Actions artifact and extract it.
-3. Rename `CTRPluginFramework-BlankTemplate.3gx` to `CollieKart.3gx`, and replace the plugin only after powering off the console.
-4. Launch MK7; check bottom-left `CK P006.2 | INACTIVE`, toggle READY.
+1. Save the P006.2 working `CollieKart.3gx` backup onto the iPhone.
+2. Download the successful **Collie-Kart-P0063-3GX** workflow artifact (compiled but hardware-UNVERIFIED).
+3. Extract and rename `CTRPluginFramework-BlankTemplate.3gx` to `CollieKart.3gx`, then replace `SD:/luma/plugins/0004000000030800/CollieKart.3gx` with your 3DS powered OFF.
+4. Start MK7 USA Time Trial on Toad Circuit. Verify bottom-left `CK P006.3 | INACTIVE`, then toggle READY.
 
-## Hardware test — safe, no artificial accelerator
+## Test 1 — PASS-THROUGH hook only
 
-1. Go to **Toad Circuit Time Trial**.
-2. From CTRPF enable **Toggle NATIVE setter preflight**. Also enable **Toggle READ-ONLY input trace** if desired.
-3. Select **Start recording**.
-4. Close the menu and resume the game. Drive normally, holding **physical A** for about five seconds and steering left and right; release the accelerator and stop.
-5. Open **Native setter diagnostics**. Photograph the whole panel.
-6. Choose **Stop & Save CSV**. Transfer the new `SD:/CollieKart/session_NNN.csv` to your iPhone and share it here.
-7. Optional: when stationary on a grounded surface, queue the **5s SAFETY dry run**, close menus/resume game, and verify it finishes harmlessly. Repeat and press physical B during countdown to verify abort. There is no real pulse option.
+**DO THIS FIRST. No artificial input is used in this test.**
 
-**Stop and restore P006.1 if FPS worsens, the game becomes unstable, or the probe reports obviously corrupted pointers.**
+1. On Toad Circuit Time Trial, stationary, READY on, open CTRPF.
+2. Select **1: Install PASS-THROUGH hook**. If the signature reports 0 or >1 matches, **STOP**. This build cannot safely locate the correct USA function; send the result.
+3. If hook installation succeeds, close the menu and resume MK7 normally. Drive using physical A for 3–5 seconds, steer left/right and press B briefly. Nothing should feel different from P006.2.
+4. Choose **2: Native hook diagnostics**. Require **Hook installed: YES**, many **Player input frames**, and **Physical-A hook frames** at least 10. If callbacks remain 0 or the game responds incorrectly, **STOP**, do not proceed to an artificial pulse.
+5. If anything slows, crashes, or feels strange, restore P006.2 and send the diagnostic screen. Do not assume a successful cloud build verifies a game hook on hardware.
 
-## New CSV columns
+## Test 2 — two harmless safety rehearsals
 
-Appended after the P006.1 fields:
-`setter_read_valid,setter_chain_valid,setter_mask,setter_chain_length,setter_candidates,setter_node0_addr,setter_node0_buttons,setter_node0_update,setter_node1_addr,setter_node1_buttons,setter_node1_update,setter_node2_addr,setter_node2_buttons,setter_node2_update,setter_node3_addr,setter_node3_buttons,setter_node3_update,setter_polls,setter_failures,setter_structural_matches`
+1. Park on a flat, grounded Time Trial road with READY on.
+2. Select **3: Queue 5s SAFETY dry run**, close CTRPF and exit MK7's own pause menu early in the countdown using A or START.
+3. Release A/START before the final second. The dry run must reach FINISHED with **no artificial input**.
+4. Repeat **3: Queue 5s SAFETY dry run**, resume MK7, then tap physical **B** during the countdown. Inspect **2: Native hook diagnostics** or **Profiler & control diagnostics**: physical-B abort verified.
+5. All these conditions must remain true **within one MK7 session**: 30 native player-hook callbacks, 10 manual-A hook callbacks, successful dry run, and separate physical B abort.
 
-These are **diagnostic candidates**. Do not use addresses or names as proof that a safe controller setter has been found.
+## Test 3 — optional native A pulse, ONLY after tests 1 and 2 pass
 
-## Criteria before any native acceleration command
+1. Record the hook diagnostic screen first. **Do not test if physical controls behaved unusually.**
+2. Stationary on the ground in Toad Circuit Time Trial, READY enabled. Keep the physical A and B buttons released.
+3. Select **4: Queue NATIVE 3-frame A pulse**, accept the warning, close CTRPF, and resume MK7 early during the familiar **five-second countdown**.
+4. Release A/START before the final second. The callback will **attempt three A-input game frames at most**, with an independent **350ms deadline**. After the third call the callback returns to **normal physical input on subsequent frames**, without restoring any persistent button override. **Real hardware release is not yet verified.**
+5. Physical B can abort while the game-frame callback is running; the normal CTRPF menu-based abort also works if the plugin remains responsive. If the game freezes neither software abort is guaranteed.
+6. Watch whether the kart starts moving **and whether it stops accelerating after the pulse**. Keep the first attempt to a single trial; do not repeat if anything seems wrong.
+7. Inspect **2: Native hook diagnostics** for **Native A frames** (target 3) and **Pass-through release frames** (at least 3). These counters prove the hook wrote input and subsequently observed original unpressed input; they do *not* alone prove the game's vehicle consumed each artificial frame.
+8. If you have enabled **Start recording**, use **Stop & Save CSV** to save the new `SD:/CollieKart/session_NNN.csv` and share it, along with any observations. Recording is opt-in.
 
-- The same live player pad and candidate setter must be identified across multiple real driving samples.
-- We must establish which MK7 processing phase consumes the setter fields; a display callback may be too late/early.
-- A native actuation method must include a verified neutral-input/release path and immediate return to physical controller authority; merely stopping writes is **not** enough.
-- We need bounded countdown, human authorization, reliable physical override, valid grounded/stationary Time Trial checks, timing watchdog, and a recovery method for failure.
-- The actual first short acceleration pulse should be **separately approved and field-tested**, not enabled by this read-only diagnostic run.
+### How to interpret results
 
-The successful cloud build validates compilation only. All new pointer-chain interpretations need real New 3DS testing before use.
+- **Signature missing or nonunique:** no hook installed; revise USA signature research.
+- **Pass-through hook breaks manual driving:** stop, revert to P006.2; hook ABI/timing/location is incompatible.
+- **3 injected frames, no movement:** may be too short, ignored downstream, or mismatched hook timing. Don't increase pulse automatically.
+- **3 injected frames + movement, but no normal-release frames:** stop; inspect safety and restore fallback.
+- **3 injected frames + movement + normal physical control afterward:** first promising native-control result. Still validate stability and emergency override separately before adding steering or learning.
+
+## Safety limits
+
+- Off by default; hook installation requires an explicit menu action.
+- A `Controller::InjectKey` HID pulse is not used anywhere in this build.
+- Unique USA executable signature requirement; never hardcode the EUR2 address.
+- Pass-through physical A must be observed >=10 frames before the real test is unlocked.
+- Five-second countdown, neutral-input guard, dry-run completion, physical-B dry-run abort.
+- A substitution is ONLY local player A, maximum 3 game callbacks, expiration deadline 350ms. No sustained steering or automatic repetition.
+- Physical B cancels a pending/active experiment while callbacks run; turning READY off and reopening CTRPF also disarms it.
+- Hook is disabled when the plugin exits normally; crashes/frozen callbacks may prevent this.
+- Human must supervise the hardware test. Current hook, release and game input behavior remain **UNVERIFIED on real hardware**.
+
+## New flight-recorder columns
+
+P006.3 appends these to P006.2 CSVs:
+`native_hook_address,native_hook_frames,native_manual_a_frames,native_injected_frames,native_release_frames,native_pulse_state`.
+
+The meaning of `native_pulse_state` is: 0 disabled, 1 armed, 2 three A-frame writes finished, 3 aborted. These are plugin states, not direct game physics.
+
+The known P006.2 performance was smooth according to the latest hardware report. This P006.3 has additional hook overhead and must be checked for slowdown separately.
+
+### Version backups
+Original P006.2: branch `collie-kart-p0062-native-control-preflight`.
+P006.3 development: branch `collie-kart-p0063-frame-hook-first-contact`.
