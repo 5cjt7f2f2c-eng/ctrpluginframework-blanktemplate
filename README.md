@@ -33,18 +33,18 @@ All ordinary P005 features should still function. If anything freezes or acts su
 ## Test B — SAFETY dry run (NO injected inputs)
 
 1. Stay on **Toad Circuit Time Trial**, on level ground, stopped, with READY ON and candidate telemetry valid.
-2. Choose **Queue DRY RUN (no input)**, close the plugin menu, and wait ~1.5 seconds. The plugin should finish without moving the kart. This unlocks the first dry-run criterion.
-3. Queue **ANOTHER** dry run, close the menu, and immediately press **physical B** before 1.5 seconds elapse. Check **Profiler & control diagnostics**. It should report `ABORTED` with `B/START physical override`, and `Physical abort verified: YES`.
+2. Choose **Queue DRY RUN (no input)**, close the plugin menu, and release A/B/START. **P006 now waits for the menu to close, gives the menu's A press 400ms to clear, then requires 150ms of neutral controls before starting the 1.5-second countdown.** The plugin should finish without moving the kart. This unlocks the first dry-run criterion.
+3. Queue **ANOTHER** dry run, close the menu, release the menu buttons and wait until the state reaches **COUNTDOWN**, then press **physical B** before the countdown finishes. Check **Profiler & control diagnostics**. It should report `ABORTED` with `B/START physical override`, and `Physical abort verified: YES`.
 4. The real experiment stays locked until **both** a successful dry run AND a physical-abort dry run are observed within this game session. The lock resets when the game/plugin restarts.
 
-**Warning:** Mario Kart uses B for brake/reverse; press it only when stationary in the dry-run test. CTRPF menu opening also cancels a queued or active test.
+**Warning:** Mario Kart uses B for brake/reverse; press it only when stationary in the dry-run test. If the menu key state does not clear within 3.5 seconds, P006 now aborts safely with `A/B/START remained held after menu` rather than attempting artificial input. CTRPF menu opening also cancels a queued or active test.
 
 ## Test C — optional single real A-key experiment
 
 **Only after Tests A and B pass and the 3DS behaves normally. This test is fully opt-in.**
 
 1. Use Time Trial, stationary and grounded; keep the physical A button released.
-2. Choose `Queue REAL A pulse (EXPERIMENT)` from CTRPF and close the menu.
+2. Choose `Queue REAL A pulse (EXPERIMENT)` from CTRPF, close the menu, and release the buttons to satisfy the new release interlock.
 3. After the countdown, the plugin requests a **single short HID A-key burst** (at most 80 ms), then ceases all injections. You can press physical B or START during countdown/pulse to abort if callbacks continue.
 4. Check whether the kart begins accelerating and, most importantly, **whether it stops accelerating after the pulse**. Record the outcome even if no movement happens.
 5. Use `Profiler & control diagnostics` to inspect `HID injection calls`, `Control phase`, and `MK7 control bits`. If it does not release naturally, stop the game and disable Plugin Loader; do not repeat.
@@ -74,7 +74,7 @@ The existing P005 reward weights and all original CSV columns are unchanged.
 
 - Real injection only after a dry run + physical B/START abort has passed.
 - User must be READY and on MK7 USA, with valid stationary grounded telemetry.
-- 1.5s countdown; 80ms **maximum request duration**; callbacks with a gap over 250ms abort. Holding physical A during the countdown also aborts.
+- 400ms post-menu grace and 150ms stable-neutral interlock, then 1.5s countdown; 80ms **maximum request duration**; callbacks with a gap over 250ms abort. Holding physical A during countdown also aborts.
 - B or START triggers abort if detected; reopening CTRPF menu also aborts; READY OFF aborts.
 - The plugin stops requesting injections after the pulse. **It cannot currently guarantee clearing the shared HID buffers or overriding a frozen callback.**
 - The first pulse intentionally has very short duration, and therefore **may not be noticed by the game**; that is a diagnostic result, not a failure to be hidden.
