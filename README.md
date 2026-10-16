@@ -1,50 +1,59 @@
-# Collie Kart Portable — P003 Flight Recorder
+# Collie Kart Portable P004 — Environment & Reward Probe
 
-**Development build. Back up your known-working P002 .3gx before testing.**
+**Experimental hardware build. Back up working P003 before installation.**
 
-P001 passed its bottom-screen indicator, toggle, diagnostics, and Time Trial tests on real New 3DS hardware. P002 also showed live lap/checkpoint/progress/speed readings that the tester reported changed appropriately during Time Trial, with no stuttering or other unusual behavior.
+## Already demonstrated
 
-P003 keeps the same approved indicator position, game-specific checks, and telemetry. It adds a **manual, opt-in flight recorder**. It never takes control of the kart or writes to MK7 game memory.
+- P001 UI toggles, menu and bottom-left indicator run in MK7 on New 3DS.
+- P002 speed, lap and checkpoint progress responded during Time Trials without noticeable slowdown.
+- P003 wrote its first actual SD CSV, transferred back for analysis. Its existing data path is preserved.
+- P004 is **new, compiled software**, but its new environmental flags, events and rewards have **not yet been tested** on the console.
 
-## How recording works
+## P004 additions
 
-1. Set **READY** in the plugin menu.
-2. In Mario Kart 7 **Time Trial**, select **Start recording** from the CTRPF menu.
-3. Close the menu and drive. The plugin buffers readings in RAM around **twice per second** while you play. Disk writes do not happen in the racing loop.
-4. When finished, reopen the plugin menu and choose **Stop & Save CSV**.
-5. The plugin creates **SD:/CollieKart/session_001.csv**, then session_002.csv, and so on. It will not intentionally overwrite a prior session.
-6. Remove the microSD after properly powering off the console, or retrieve the CSV with FTPD on a local Wi-Fi network. Open the CSV in your iPhone's Files app / spreadsheet viewer or share it with ChatGPT for analysis.
+- **Driving modes** (read-only candidates): `GROUND`, `UNDERWATER`, `AIRBORNE`, `GLIDING`, `UNKNOWN`.
+- **Independent pad activation counters:** glider pad via `VehicleMove::StatusFlags.glider_pad`; normal boost pad via `VehicleMove::BoostFlags.boost_pad`. These counters detect *rising edges*, not guaranteed physical collisions. The game may keep a boost flag active across adjacent pads.
+- **Glider transitions**: open/deployed, close on ground, close while airborne, and `wing_force_close` rising signal. **The program does NOT interpret force-close as a proven manual brake action, and applies no brake/glider penalty yet.** Input causality still needs verification.
+- **Mode durations:** separate cumulative durations in milliseconds for grounded, underwater, airborne (without glider) and gliding. Pauses/long gaps are excluded.
+- **Surface & boost research:** raw KCL type from `VehicleMove + 0xD14` and dash type from `VehicleMove + 0xF98` are logged for calibration. There is **no off-road punishment yet** because drivable and penalizing terrain categories are not verified.
+- **Passive reward calculation:** new max completion delta times 100, elapsed-time cost of -0.1/second, and candidate +20 for a forward lap transition. Progress jumps above 0.10/sample are rejected. No automatic rewards for boost/glider-pad contact, preventing pad farming.
+- All state events are counted using lightweight frame-level polling. Larger telemetry snapshots and CSV rows remain at the existing ~1–2/s interval.
+- Add `Environment & rewards` menu entry, extend diagnostics and append CSV columns. P001 bottom-left HUD placement is unchanged.
+- **No autonomous steering, learning, game-memory edits or automatic SD writes.** Saves happen only when `Stop & Save CSV` is explicitly selected.
 
-**Save is manual.** Turning off READY stops recording but retains the buffered session. If the console crashes or powers off before **Stop & Save CSV**, unsaved samples are lost.
+## Install
 
-### Recording limits
+1. **Back up P003's working CollieKart.3gx on your iPhone.**
+2. Download and extract a **successful** GitHub Actions artifact named `Collie-Kart-P004-3GX`.
+3. Rename compiled `CTRPluginFramework-BlankTemplate.3gx` to `CollieKart.3gx`.
+4. Shut down the 3DS and replace `SD:/luma/plugins/0004000000030800/CollieKart.3gx` (the MK7 USA title ID confirmed by FBI). Avoid other MK7 plugins during test.
+5. Launch MK7 and ensure `CK P004 | INACTIVE` appears.
 
-- Buffer capacity: **1,800 samples** (about **15 minutes** at 2 Hz).
-- When full, recording automatically stops; **BUFFER FULL** appears. Choose Stop & Save CSV to retain the collected session.
-- Invalid readings are preserved as rows with `valid=0` and a failure stage, rather than silently masquerading as true telemetry.
-- Timestamps are milliseconds since recording started, including time spent in the plugin menu. They are not guaranteed to correspond exactly to in-game elapsed time.
-- CSV columns: `elapsed_ms,valid,lap,checkpoint,completion,max_completion,pos_x,pos_y,pos_z,speed_valid,speed_game_units,probe_stage`.
-- Speed uses **internal game units**, not automatically km/h or mph.
-- Only the **USA** MK7 memory layout is currently supported. The program cannot yet automatically identify a genuine Time Trial; only start recording while inside one.
-- Stop & Save performs file operations while the CTRPF menu is open. If saving fails, an incomplete file may remain and samples are kept in RAM for a retry, provided the plugin remains running.
+## Calibration runs — do not merge P004 before testing
 
-## Installation
+For each test, turn on **READY**, enter a Time Trial, **Start recording**, perform the exercise, then **Stop & Save CSV**. Each run creates a new `SD:/CollieKart/session_NNN.csv`; previous sessions are not intentionally overwritten.
 
-1. Download the successful **Collie-Kart-P003-3GX** artifact and unzip it on your iPhone.
-2. **Back up P002's working CollieKart.3gx** somewhere safe, preferably outside the SD card.
-3. Rename the new `CTRPluginFramework-BlankTemplate.3gx` to `CollieKart.3gx`.
-4. Shut down MK7 and power off the 3DS. Replace the plugin in:
-   `SD:/luma/plugins/0004000000030800/CollieKart.3gx` (USA MK7, Title ID previously confirmed by FBI).
-5. Launch MK7 with the 3GX Plugin Loader enabled. The plugin should show `CK P003 | INACTIVE` at the familiar bottom-left position.
-6. First verify the P001/P002 toggles and telemetry. Record a **short 30–60 second drive** before attempting longer logs.
-7. After Stop & Save, confirm the CSV is actually present and contains plausible changing values. No successful save has been verified on physical hardware yet.
+1. **Ordinary driving on Toad Circuit:** verify mode stays GROUND, speed and checkpoint behave as in P003. Observe candidate reward rising with new max completion and decreasing slightly while stopped.
+2. **Normal glide:** drive over Toad Circuit's blue glider pad and glide to the natural landing. Expect a glider-pad activation, deployment, gliding duration and landing closure. Inspect raw flags if any counter differs.
+3. **Manual early closure:** repeat the glide but deliberately press the brake once while safely airborne. Check force-close signal, midair closure and gliding duration. **A midair closure isn't automatically a manual brake event.** No penalty is applied.
+4. **Ordinary jump:** use an ordinary ramp without glider activation. Expect AIRBORNE, not GLIDING. If you see UNKNOWN, use raw air/ground frame counts to debug.
+5. **Regular boost pad:** cross an ordinary boost pad and check it increments boost-pad activations without incrementing glider-pad activations.
+6. **Underwater:** later test a suitable underwater section (e.g., Cheep Cheep Lagoon) to check the `in_water` flag and time counter.
+
+Send the CSV(s) or photographs of **Environment & rewards** diagnostics; report freezes or frame drops. If unstable, restore P003.
+
+## CSV additions
+
+P004 appends these columns to P003's existing telemetry CSV:
+`mode,mode_valid,status_flags,boost_flags,air_frames,ground_frames,surface_code,dash_type,glider_pad_activations,boost_pad_activations,glider_deployments,force_close_signals,midair_glider_closures,landing_glider_closures,ground_ms,underwater_ms,airborne_ms,gliding_ms,reward_progress,reward_time,reward_lap,reward_total,reward_cumulative`.
+
+- Invalid environmental reads become `UNKNOWN` with `mode_valid=0`.
+- Raw flags are hex; `4294967295` means an unknown optional surface/dash code.
+- Counts accumulate over the recording session and may lag by up to the CSV snapshot interval.
+- Reward values are experimental **scores**, not validated training rewards. No learning occurs in P004.
+- The original P003 size cap remains **1,800 rows**. When full, Stop & Save; no automatic saving or in-race disk writes.
+- The game version's memory layout and these newly decoded bits are based on [mk7re/MK7-Memory](https://github.com/mk7re/MK7-Memory/blob/master/template/Kart/Vehicle/VehicleMove.hpp) and [mk7re/MK7-Emu-Scripts](https://github.com/mk7re/MK7-Emu-Scripts) and must be verified on physical 3DS.
 
 ## Recovery
 
-In case of crash, unusual FPS behavior, or save errors: disable Plugin Loader and restore your **P002** plugin backup; then report what happened. Do not merge the development branch until actual P003 save/reload tests pass.
-
-### Source notes
-
-Telemetry was adapted from [mk7re/MK7-Emu-Scripts](https://github.com/mk7re/MK7-Emu-Scripts), whose published version explicitly says it was tested in Citra, not physical 3DS hardware. The user has confirmed plausible responding values from P002 on their actual console, but edge cases and calibration remain unverified.
-
-CTRPluginFramework's `Directory` and `File` SD-card APIs are used to keep file operations outside the game-rendering loop. The only filesystem writes are under `/CollieKart` when **Stop & Save CSV** is explicitly selected.
+A native plugin can freeze even if it never writes to the game. Disable Plugin Loader, restore your P003 backup, and report any issue. Existing CSVs remain in `SD:/CollieKart/`.
