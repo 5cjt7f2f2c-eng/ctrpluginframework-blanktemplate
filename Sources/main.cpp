@@ -1265,7 +1265,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P006 | READY" : "CK P006 | INACTIVE",
+            screen.Draw(g_ready ? "CK P006.1 | READY" : "CK P006.1 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -1597,9 +1597,9 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P006", 0, 0, 6,
-            "Profiler + one-shot experimental HID A pulse.\n"
-            "Inputs unverified; no learning or MK7 RAM writes.");
+        PluginMenu menu("Collie Kart P006.1", 0, 0, 7,
+            "Read-only native input pipeline trace.\n"
+            "No controller injection option exposed in this build.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
@@ -1626,8 +1626,8 @@ namespace CTRPluginFramework
             "Frame callback timing, experimental control status and abort reason.");
         menu += new MenuEntry("Queue DRY RUN (no input)", nullptr, QueueDryRun,
             "Countdown test with NO artificial buttons. Test physical B abort.");
-        menu += new MenuEntry("Queue REAL A pulse (EXPERIMENT)", nullptr, QueueRealPulse,
-            "One-shot 80ms maximum HID-key experiment; first pass dry-run.");
+        // Real A-key injection intentionally NOT exposed in this read-only
+        // hardware diagnostic branch. Original P006 keeps the experiment.
         menu += new MenuEntry("ABORT control experiment", nullptr, CancelControl,
             "Cancel any queued experiment. Physical B/START also abort.");
         OSD::Run(DrawStatus);
