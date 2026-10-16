@@ -1,8 +1,8 @@
-name: Collie Kart P006.2 Native Setter Preflight Build
+name: Collie Kart P006.3 Native Frame Hook Build
 
 on:
   push:
-    branches: [master, collie-kart-p005-sensor-fusion, collie-kart-p006-first-contact, collie-kart-p006-input-pipeline-trace, collie-kart-p0062-native-control-preflight]
+    branches: [master, collie-kart-p005-sensor-fusion, collie-kart-p006-first-contact, collie-kart-p006-input-pipeline-trace, collie-kart-p0062-native-control-preflight, collie-kart-p0063-frame-hook-first-contact]
   pull_request:
     branches: [master, collie-kart-p005-sensor-fusion]
   workflow_dispatch:
@@ -15,17 +15,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build P006.2
+      - name: Build P006.3
         run: make
       - name: Upload plugin 3GX
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P0062-3GX
+          name: Collie-Kart-P0063-3GX
           path: CTRPluginFramework-BlankTemplate.3gx
           if-no-files-found: error
       - name: Upload debug ELF
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P0062-ELF
+          name: Collie-Kart-P0063-ELF
           path: CTRPluginFramework-BlankTemplate.elf
           if-no-files-found: error
