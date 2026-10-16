@@ -1,105 +1,99 @@
-#include <3ds.h>
-#include "csvc.h"
-#include <CTRPluginFramework.hpp>
+// Collie Kart Portable P001 -- display-only Mario Kart 7 plugin.
+// No game patches, controller override, learning, or SD writes.
+// Derived from CTRPluginFramework-BlankTemplate (Nanquitas / PabloMK7).
 
-#include <vector>
+#include <3ds.h>
+#include <CTRPluginFramework.hpp>
+#include <string>
 
 namespace CTRPluginFramework
 {
-    // This patch the NFC disabling the touchscreen when scanning an amiibo, which prevents ctrpf to be used
-    static void    ToggleTouchscreenForceOn(void)
+    namespace
     {
-        static u32 original = 0;
-        static u32 *patchAddress = nullptr;
+        constexpr u64 MK7_USA = 0x0004000000030800ULL;
+        constexpr u64 MK7_EUR = 0x0004000000030700ULL;
+        constexpr u64 MK7_JPN = 0x0004000000030600ULL;
 
-        if (patchAddress && original)
+        bool g_verified = false;
+        bool g_ready = false;
+        unsigned int g_toggles = 0;
+        const char *g_region = "UNKNOWN";
+
+        bool DrawStatus(const Screen &screen)
         {
-            *patchAddress = original;
-            return;
+            if (screen.IsTop || !g_verified)
+                return true;
+
+            // Bottom-screen placement is provisional; verify it does not
+            // hide the MK7 minimap/HUD during Time Trials.
+            screen.DrawRect(2, 224, 156, 14, Color::Black, true);
+            screen.Draw(g_ready ? "CK P001 | READY" : "CK P001 | INACTIVE",
+                        5, 226,
+                        g_ready ? Color::Green : Color::White,
+                        Color::Black);
+            return true;
         }
 
-        static const std::vector<u32> pattern =
+        void ToggleReady(MenuEntry *)
         {
-            0xE59F10C0, 0xE5840004, 0xE5841000, 0xE5DD0000,
-            0xE5C40008, 0xE28DD03C, 0xE8BD80F0, 0xE5D51001,
-            0xE1D400D4, 0xE3510003, 0x159F0034, 0x1A000003
-        };
-
-        Result  res;
-        Handle  processHandle;
-        s64     textTotalSize = 0;
-        s64     startAddress = 0;
-        u32 *   found;
-
-        if (R_FAILED(svcOpenProcess(&processHandle, 16)))
-            return;
-
-        svcGetProcessInfo(&textTotalSize, processHandle, 0x10002);
-        svcGetProcessInfo(&startAddress, processHandle, 0x10005);
-        if(R_FAILED(svcMapProcessMemoryEx(CUR_PROCESS_HANDLE, 0x14000000, processHandle, (u32)startAddress, textTotalSize)))
-            goto exit;
-
-        found = (u32 *)Utils::Search<u32>(0x14000000, (u32)textTotalSize, pattern);
-
-        if (found != nullptr)
-        {
-            original = found[13];
-            patchAddress = (u32 *)PA_FROM_VA((found + 13));
-            found[13] = 0xE1A00000;
+            if (!g_verified)
+                return;
+            g_ready = !g_ready;
+            ++g_toggles;
         }
 
-        svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, 0x14000000, textTotalSize);
-exit:
-        svcCloseHandle(processHandle);
-    }
-
-    // This function is called before main and before the game starts
-    // Useful to do code edits safely
-    void    PatchProcess(FwkSettings &settings)
-    {
-        ToggleTouchscreenForceOn();
-    }
-
-    // This function is called when the process exits
-    // Useful to save settings, undo patchs or clean up things
-    void    OnProcessExit(void)
-    {
-        ToggleTouchscreenForceOn();
-    }
-
-    void    InitMenu(PluginMenu &menu)
-    {
-        // Create your entries here, or elsewhere
-        // You can create your entries whenever/wherever you feel like it
-        
-        // Example entry
-        /*menu += new MenuEntry("Test", nullptr, [](MenuEntry *entry)
+        void ShowDiagnostics(MenuEntry *)
         {
-            std::string body("What's the answer ?\n");
+            if (!g_verified)
+                return;
 
-            body += std::to_string(42);
-
-            MessageBox("UA", body)();
-        });*/
+            std::string details = "Game: Mario Kart 7 (";
+            details += g_region;
+            details += ")\nTitle ID: VERIFIED\n";
+            details += "Status: ";
+            details += (g_ready ? "READY\n" : "INACTIVE\n");
+            details += "Toggle count: " + std::to_string(g_toggles) + "\n";
+            details += "Race detection: NOT IMPLEMENTED\n";
+            details += "Kart controls: DISABLED\n";
+            details += "Learning: DISABLED\n";
+            details += "SD writes: NONE\n\n";
+            details += "P001 only tests the UI and game attachment.";
+            MessageBox("Collie Kart P001 Diagnostics", details)();
+        }
     }
 
-    int     main(void)
+    // The upstream template patches the game touchscreen/NFC behavior.
+    // P001 deliberately does not patch any process memory.
+    void PatchProcess(FwkSettings &) {}
+    void OnProcessExit(void) {}
+
+    int main(void)
     {
-        PluginMenu *menu = new PluginMenu("Action Replay", 0, 8, 0,
-                                            "A blank template plugin.\nGives you access to the ActionReplay and others tools.");
+        const u64 id = Process::GetTitleID();
 
-        // Synnchronize the menu with frame event
-        menu->SynchronizeWithFrame(true);
+        if (id == MK7_USA) { g_verified = true; g_region = "USA"; }
+        else if (id == MK7_EUR) { g_verified = true; g_region = "EUR"; }
+        else if (id == MK7_JPN) { g_verified = true; g_region = "JPN"; }
 
-        // Init our menu entries & folders
-        InitMenu(*menu);
+        // Refuse to initialize inside other games.
+        if (!g_verified)
+            return 0;
 
-        // Launch menu and mainloop
-        menu->Run();
+        PluginMenu menu("Collie Kart P001", 0, 0, 1,
+            "Systems check only: no driving, learning, or game-memory edits.\n"
+            "Select an entry with A. Close the menu to view the bottom HUD.");
 
-        delete menu;
+        menu.SynchronizeWithFrame(true);
+        menu.ShowWelcomeMessage(false);
 
-        // Exit plugin
-        return (0);
+        menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
+            "Only changes the on-screen status flag; never drives the kart.");
+        menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
+            "Shows attachment verification, toggles and disabled functions.");
+
+        OSD::Run(DrawStatus);
+        menu.Run();
+        OSD::Stop(DrawStatus);
+        return 0;
     }
 }
