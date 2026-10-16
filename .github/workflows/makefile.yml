@@ -1,33 +1,31 @@
-name: Makefile CI
+name: Collie Kart P001 Build
 
 on:
   push:
-    branches: [ master ]
+    branches: [master, collie-kart-p001]
   pull_request:
-    branches: [ master ]
+    branches: [master]
+  workflow_dispatch:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-    
     container:
       image: pablomk7/libctrpf:0.8.0
 
     steps:
-    - uses: actions/checkout@v2
-      
-    - name: Build Plugin
-      run: make
-      
-    - name: Upload Plugin
-      uses: actions/upload-artifact@v4
-      with:
-        name: Plugin 3GX File
-        path: CTRPluginFramework-BlankTemplate.3gx
-    
-    - name: Upload Plugin ELF
-      uses: actions/upload-artifact@v4
-      with:
-        name: Plugin ELF File
-        path: CTRPluginFramework-BlankTemplate.elf
+      - uses: actions/checkout@v4
+      - name: Build P001
+        run: make
+      - name: Upload plugin 3GX
+        uses: actions/upload-artifact@v4
+        with:
+          name: Collie-Kart-P001-3GX
+          path: CTRPluginFramework-BlankTemplate.3gx
+          if-no-files-found: error
+      - name: Upload debug ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: Collie-Kart-P001-ELF
+          path: CTRPluginFramework-BlankTemplate.elf
+          if-no-files-found: error
