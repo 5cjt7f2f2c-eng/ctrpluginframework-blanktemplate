@@ -1,7 +1,8 @@
-// Collie Kart Portable P005 -- passive sensor fusion and reward diagnostics.
-// Compiled research prototype. No controller injection, game RAM writes,
-// learning or automatic SD writes. Stop & Save CSV is opt-in.
-// P001 HUD, P002 telemetry, P003 flight recorder and P004 rewards preserved.
+// Collie Kart Portable P006 -- experimental profiling and first-contact HID.
+// No writes to MK7 process memory or autonomous steering / machine learning.
+// One opt-in HID InjectKey(A) experiment after a full dry-run; release not yet
+// hardware-verified, so each experiment is isolated and deliberately short.
+// All prior P001-P005 sensor and SD recorder paths remain supported.
 
 #include <3ds.h>
 #include <CTRPluginFramework.hpp>
@@ -37,6 +38,73 @@ namespace CTRPluginFramework
         u64 g_startedMs = 0;
         std::string g_lastFile = "(none)";
         const char *g_region = "UNKNOWN";
+
+        // PROFILER: callback cadence is a proxy, NOT verified game FPS.
+        bool g_profilerEnabled = false;
+        u64 g_prevCallbackAt = 0;
+        u32 g_profileCallbackGapMs = 0, g_profileCallbackWorkMs = 0;
+        u32 g_profileProbeMs = 0, g_profileMaxGapMs = 0, g_profileMaxWorkMs = 0;
+        u32 g_profileProbeUs = 0, g_profileCallbackWorkUs = 0;
+        u32 g_profileMaxWorkUs = 0, g_environmentReadUs = 0;
+        u32 ElapsedUs(u64 startTick)
+        {
+            const u64 endTick = svcGetSystemTick();
+            return endTick >= startTick
+                ? static_cast<u32>((endTick - startTick) * 1000000ULL /
+                                    SYSCLOCK_ARM11)
+                : 0;
+        }
+        unsigned g_profileCallbacks = 0, g_profileLargeGaps = 0;
+        u64 g_profileWorkTotalMs = 0;
+
+        // SAFETY: the injection experiment is one-shot; never a held controller.
+        // FRAMEWORK DETAILS: Controller::InjectKey ORs a key into 8 HID buffers.
+        // It has no guaranteed release API. We cease writing after one burst,
+        // relying on normal HID refresh. Physical B or START requests abort.
+        enum ControlPhase { DISARMED = 0, WAIT_CLOSE = 1,
+            COUNTDOWN = 2, PULSE = 3, FINISHED = 4, ABORTED = 5,
+            OBSERVE = 6 };
+        const char *ControlName(ControlPhase phase)
+        {
+            switch (phase)
+            {
+                case WAIT_CLOSE: return "WAIT_CLOSE";
+                case COUNTDOWN: return "COUNTDOWN";
+                case PULSE: return "PULSE";
+                case OBSERVE: return "OBSERVE";
+                case FINISHED: return "FINISHED";
+                case ABORTED: return "ABORTED";
+                default: return "DISARMED";
+            }
+        }
+        ControlPhase g_control = DISARMED;
+        bool g_dryRunComplete = false;
+        bool g_physicalAbortVerified = false;
+        bool g_controlIsDryRun = true;
+        u64 g_controlNextAt = 0, g_controlPulseStart = 0;
+        u64 g_controlLastCallbackAt = 0, g_controlObserveEndAt = 0;
+        unsigned g_hidInjectionCalls = 0, g_controlAborts = 0;
+        unsigned g_pulseControlReads = 0;
+        unsigned g_manualAControlReads = 0, g_manualAMatchedReads = 0;
+        bool g_pulseMk7AccelerateSeen = false, g_pulseMovedSeen = false;
+        bool g_kdPadPauseKnown = false, g_kdPadPaused = false;
+        const char *g_lastAbortReason = "None";
+        // Five seconds to return from CTRPF to MK7 and leave game pause.
+        // Last 800ms is a neutral-input guard; B aborts at any time.
+        constexpr u64 FIRST_CONTACT_COUNTDOWN_MS = 5000;
+        constexpr u64 FIRST_CONTACT_FINAL_GUARD_MS = 800;
+        constexpr u64 FIRST_CONTACT_NEUTRAL_AT_PULSE_MS = 300;
+        constexpr u64 FIRST_CONTACT_OBSERVE_MS = 1300;
+        constexpr u64 FIRST_CONTACT_MAX_PULSE_MS = 80;
+        constexpr u64 FIRST_CONTACT_MAX_GAP_MS = 250;
+        // Selecting a CTRPF menu item uses A. Discard UI-held button state
+        // until the menu has closed and keys are released for a short interval.
+        constexpr u64 FIRST_CONTACT_EXIT_GRACE_MS = 400;
+        constexpr u64 FIRST_CONTACT_NEUTRAL_STABLE_MS = 150;
+        constexpr u64 FIRST_CONTACT_RELEASE_TIMEOUT_MS = 3500;
+        u64 g_controlWaitStartedAt = 0, g_controlNeutralSince = 0;
+        u32 g_vehicleControlsObserved = 0;
+        bool g_vehicleControlsValid = false;
 
         struct Observation
         {
@@ -147,6 +215,16 @@ namespace CTRPluginFramework
             unsigned envPolls = 0, envReadFails = 0;
             u32 pollGapMs = 0, pollReadMs = 0, maxPollReadMs = 0;
             u32 sampleGapMs = 0;
+            u32 callbackGapMs = 0, callbackWorkMs = 0, probeWorkMs = 0;
+            u32 callbackWorkUs = 0, probeWorkUs = 0, environmentReadUs = 0;
+            unsigned callbackCount = 0, slowCallbacks = 0;
+            unsigned injectionCalls = 0, abortedCount = 0;
+            bool vehicleControlsValid = false;
+            u32 vehicleControls = 0;
+            ControlPhase controlPhase = DISARMED;
+            unsigned pulseInputReads = 0, manualAConfirmed = 0;
+            bool pulseAccelSeen = false, pulseMoved = false;
+            bool padPauseKnown = false, padPaused = false;
         };
         Record g_records[MAX_LOG_SAMPLES];
         unsigned g_count = 0;
@@ -164,6 +242,25 @@ namespace CTRPluginFramework
                 r.elapsedMs >= g_lastCaptureElapsed
                 ? r.elapsedMs - g_lastCaptureElapsed : 0;
             g_lastCaptureElapsed = r.elapsedMs;
+            r.callbackGapMs = g_profileCallbackGapMs;
+            r.callbackWorkMs = g_profileCallbackWorkMs;
+            r.probeWorkMs = g_profileProbeMs;
+            r.callbackWorkUs = g_profileCallbackWorkUs;
+            r.probeWorkUs = g_profileProbeUs;
+            r.environmentReadUs = g_environmentReadUs;
+            r.callbackCount = g_profileCallbacks;
+            r.slowCallbacks = g_profileLargeGaps;
+            r.injectionCalls = g_hidInjectionCalls;
+            r.abortedCount = g_controlAborts;
+            r.vehicleControlsValid = g_vehicleControlsValid;
+            r.vehicleControls = g_vehicleControlsObserved;
+            r.controlPhase = g_control;
+            r.pulseInputReads = g_pulseControlReads;
+            r.manualAConfirmed = g_manualAMatchedReads;
+            r.pulseAccelSeen = g_pulseMk7AccelerateSeen;
+            r.pulseMoved = g_pulseMovedSeen;
+            r.padPauseKnown = g_kdPadPauseKnown;
+            r.padPaused = g_kdPadPaused;
 
             r.value = g_observation;
             r.environment = g_environment;
@@ -240,13 +337,13 @@ namespace CTRPluginFramework
             if (!g_verified || Process::GetTitleID() != MK7_USA)
             {
                 MessageBox("Recorder unavailable",
-                    "P005's memory layout is currently supported only for MK7 USA.")();
+                    "P006's memory layout is currently supported only for MK7 USA.")();
                 return;
             }
             if (!g_ready)
             {
                 MessageBox("Recorder inactive",
-                    "First toggle CK P005 to READY, then start recording.")();
+                    "First toggle CK P006 to READY, then start recording.")();
                 return;
             }
             if (g_recording)
@@ -344,9 +441,16 @@ namespace CTRPluginFramework
                 "brake_while_gliding_polls,brake_linked_midair_closures,"
                 "environment_polls,environment_read_failures,"
                 "environment_poll_gap_ms,environment_read_ms,"
-                "environment_max_read_ms,sample_gap_ms") == File::SUCCESS);
+                "environment_max_read_ms,sample_gap_ms,"
+                "callback_gap_ms,callback_work_ms,probe_read_ms,"
+                "profiler_callbacks,callback_gaps_over_50ms,"
+                "control_phase,hid_injection_calls,control_aborts,"
+                "mk7_controls_valid,mk7_controls_raw,"
+                "callback_work_us,probe_read_us,environment_read_us,"
+                "pulse_control_read_count,pulse_accel_bit_seen,pulse_speed_change,"
+                "manual_a_control_matches,pad_pause_known,pad_pause_candidate") == File::SUCCESS);
 
-            char line[900];
+            char line[1100];
             for (unsigned i = 0; saved && i < g_count; ++i)
             {
                 const Record &r = g_records[i];
@@ -357,7 +461,9 @@ namespace CTRPluginFramework
                     "%s,%d,0x%08lX,0x%08lX,%lu,%lu,%lu,%lu,"
                     "%u,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
                     "%.4f,%.4f,%.4f,%.4f,%.4f,"
-                    "%u,%u,%d,%u,%u,%u,%u,%lu,%lu,%lu,%lu",
+                    "%u,%u,%d,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
+                    "%lu,%lu,%lu,%u,%u,%s,%u,%u,%d,0x%08lX,"
+                    "%lu,%lu,%lu,%u,%d,%d,%u,%d,%d",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -392,7 +498,20 @@ namespace CTRPluginFramework
                     static_cast<unsigned long>(r.pollGapMs),
                     static_cast<unsigned long>(r.pollReadMs),
                     static_cast<unsigned long>(r.maxPollReadMs),
-                    static_cast<unsigned long>(r.sampleGapMs));
+                    static_cast<unsigned long>(r.sampleGapMs),
+                    static_cast<unsigned long>(r.callbackGapMs),
+                    static_cast<unsigned long>(r.callbackWorkMs),
+                    static_cast<unsigned long>(r.probeWorkMs),
+                    r.callbackCount, r.slowCallbacks,
+                    ControlName(r.controlPhase), r.injectionCalls,
+                    r.abortedCount, r.vehicleControlsValid ? 1 : 0,
+                    static_cast<unsigned long>(r.vehicleControls),
+                    static_cast<unsigned long>(r.callbackWorkUs),
+                    static_cast<unsigned long>(r.probeWorkUs),
+                    static_cast<unsigned long>(r.environmentReadUs),
+                    r.pulseInputReads, r.pulseAccelSeen ? 1 : 0,
+                    r.pulseMoved ? 1 : 0, r.manualAConfirmed,
+                    r.padPauseKnown ? 1 : 0, r.padPaused ? 1 : 0);
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -531,6 +650,7 @@ namespace CTRPluginFramework
         // Snapshot from the plugin menu does not count events or time.
         void PollEnvironment(bool menuSnapshot = false)
         {
+            const u64 perfTick = svcGetSystemTick();
             const u64 started = osGetTime();
             Environment next;
             if (!menuSnapshot)
@@ -672,6 +792,368 @@ namespace CTRPluginFramework
                 ? static_cast<u32>(completed - started) : 0;
             if (g_envLastReadMs > g_envMaxReadMs)
                 g_envMaxReadMs = g_envLastReadMs;
+            g_environmentReadUs = ElapsedUs(perfTick);
+        }
+
+
+        void AbortControl(const char *reason)
+        {
+            if (g_control == WAIT_CLOSE || g_control == COUNTDOWN ||
+                g_control == PULSE || g_control == OBSERVE)
+            {
+                g_control = ABORTED;
+                g_lastAbortReason = reason;
+                ++g_controlAborts;
+                if (reason && reason[0] == 'B' && reason[1] == '/')
+                    g_physicalAbortVerified = true;
+                // Do not inject any further artificial input.
+                g_controlNextAt = 0;
+                g_controlPulseStart = 0;
+                g_controlWaitStartedAt = g_controlNeutralSince = 0;
+                g_controlObserveEndAt = 0;
+            }
+        }
+
+        // Read MK7's candidate VehicleControl::m_controls (bit0=accelerate)
+        // without changing game memory. A 2Hz screenshot may miss an 80ms key
+        // pulse, so poll once per callback while PULSE/OBSERVE is active.
+        void SampleGameControls(bool duringExperiment)
+        {
+            if (!g_vehicleAddress || !g_observation.candidate)
+                return;
+            u32 flags = 0;
+            if (!ReadWord(g_vehicleAddress + 0xFC, flags))
+                return;
+            g_vehicleControlsObserved = flags;
+            g_vehicleControlsValid = true;
+            if (Controller::IsKeyDown(Key::A) && !duringExperiment)
+            {
+                ++g_manualAControlReads;
+                if (flags & 1)
+                    ++g_manualAMatchedReads;
+            }
+            if (duringExperiment)
+            {
+                ++g_pulseControlReads;
+                if (flags & 1)
+                    g_pulseMk7AccelerateSeen = true;
+                if (g_observation.speedValid &&
+                    g_observation.speed > 0.35f)
+                    g_pulseMovedSeen = true;
+            }
+        }
+
+        bool ControllerExperimentOK()
+        {
+            // A valid local observation is required throughout the pulse.
+            if (!g_ready || Process::GetTitleID() != MK7_USA ||
+                !g_observation.candidate || !g_observation.speedValid ||
+                !g_environment.valid || g_environment.mode != GROUND ||
+                g_vehicleAddress == 0)
+                return false;
+            // Only stationary start of the pulse; we do not abort merely
+            // because the kart starts moving after acceleration succeeds.
+            return true;
+        }
+
+        bool UserAbortPressed()
+        {
+            return Controller::IsKeyDown(Key::B) ||
+                   Controller::IsKeyDown(Key::Start);
+        }
+
+        void ControlStep(u64 now, bool menuOpen)
+        {
+            if (g_control != WAIT_CLOSE && g_control != COUNTDOWN &&
+                g_control != PULSE && g_control != OBSERVE)
+                return;
+            if (menuOpen)
+            {
+                // Selecting the menu during a queued experiment aborts it.
+                // The initial wait state is allowed while the user exits.
+                if (g_control != WAIT_CLOSE)
+                    AbortControl("Plugin menu reopened");
+                return;
+            }
+
+            if (!ControllerExperimentOK())
+            {
+                AbortControl("No valid grounded telemetry");
+                return;
+            }
+
+            // WAIT_CLOSE is a RELEASE INTERLOCK, not part of the countdown.
+            // At queue time, A is commonly held by the CTRPF menu itself.
+            // Never test A/B/START synchronously in the menu callback.
+            if (g_control == WAIT_CLOSE)
+            {
+                if (!g_controlWaitStartedAt)
+                {
+                    g_controlWaitStartedAt = now;
+                    g_controlNeutralSince = 0;
+                    return;
+                }
+                if (now < g_controlWaitStartedAt)
+                {
+                    AbortControl("Input timer reset");
+                    return;
+                }
+                const u64 elapsed = now - g_controlWaitStartedAt;
+                if (elapsed < FIRST_CONTACT_EXIT_GRACE_MS)
+                    return;
+
+                const u32 blockedKeys = static_cast<u32>(Key::A) |
+                    static_cast<u32>(Key::B) | static_cast<u32>(Key::Start);
+                if ((Controller::GetKeysDown(false) & blockedKeys) != 0)
+                {
+                    g_controlNeutralSince = 0;
+                    if (elapsed >= FIRST_CONTACT_RELEASE_TIMEOUT_MS)
+                        AbortControl("A/B/START remained held after menu");
+                    return;
+                }
+                if (g_controlNeutralSince == 0)
+                {
+                    g_controlNeutralSince = now;
+                    return;
+                }
+                if (now - g_controlNeutralSince <
+                    FIRST_CONTACT_NEUTRAL_STABLE_MS)
+                    return;
+                if (g_observation.speed > 0.35f ||
+                    g_observation.speed < -0.35f)
+                {
+                    AbortControl("Kart already moving");
+                    return;
+                }
+
+                g_control = COUNTDOWN;
+                g_controlNextAt = now + FIRST_CONTACT_COUNTDOWN_MS;
+                g_controlLastCallbackAt = now;
+                return;
+            }
+            // Physical B is the abort throughout countdown/pulse. START is
+            // deliberately permitted early in countdown to unpause MK7.
+            if (Controller::IsKeyDown(Key::B) ||
+                ((g_control == PULSE || g_control == OBSERVE) &&
+                 Controller::IsKeyDown(Key::Start)))
+            {
+                AbortControl("B/START physical override");
+                return;
+            }
+            if (g_controlLastCallbackAt != 0 &&
+                (now < g_controlLastCallbackAt ||
+                 now - g_controlLastCallbackAt > FIRST_CONTACT_MAX_GAP_MS))
+            {
+                AbortControl("Game callback gap too long");
+                return;
+            }
+            g_controlLastCallbackAt = now;
+            if (g_control == COUNTDOWN)
+            {
+                // During the early part of 5s, allow A/START to resume the
+                // game's own pause screen. Physical B always aborts.
+                const u64 remain = now < g_controlNextAt
+                    ? g_controlNextAt - now : 0;
+                if (remain <= FIRST_CONTACT_FINAL_GUARD_MS)
+                {
+                    if (Controller::IsKeyDown(Key::A) ||
+                        Controller::IsKeyDown(Key::Start))
+                    {
+                        g_controlNeutralSince = 0;
+                    }
+                    else if (g_controlNeutralSince == 0)
+                        g_controlNeutralSince = now;
+                }
+                else
+                    g_controlNeutralSince = 0;
+
+                if (g_observation.speed > 0.35f ||
+                    g_observation.speed < -0.35f)
+                {
+                    AbortControl("Moved before pulse");
+                    return;
+                }
+                if (now >= g_controlNextAt)
+                {
+                    if (g_controlNeutralSince == 0 ||
+                        now - g_controlNeutralSince <
+                        FIRST_CONTACT_NEUTRAL_AT_PULSE_MS)
+                    {
+                        AbortControl("A/START not released before test");
+                        return;
+                    }
+                    // A candidate pause flag is *logged*, not trusted as a
+                    // universal game-paused detector until field-verified.
+                    if (g_controlIsDryRun)
+                    {
+                        g_control = FINISHED;
+                        g_dryRunComplete = true;
+                    }
+                    else
+                    {
+                        g_control = PULSE;
+                        g_controlPulseStart = now;
+                        g_controlObserveEndAt = 0;
+                    }
+                }
+            }
+            if (g_control == PULSE)
+            {
+                SampleGameControls(true);
+                // Single-use short A-key burst; do not increase until game
+                // has demonstrated it receives AND releases this input.
+                if (now < g_controlPulseStart ||
+                    now - g_controlPulseStart >= FIRST_CONTACT_MAX_PULSE_MS)
+                {
+                    g_control = OBSERVE;
+                    g_controlObserveEndAt = now + FIRST_CONTACT_OBSERVE_MS;
+                    return;
+                }
+                Controller::InjectKey(static_cast<u32>(Key::A));
+                ++g_hidInjectionCalls;
+            }
+            if (g_control == OBSERVE)
+            {
+                SampleGameControls(true);
+                if (now >= g_controlObserveEndAt)
+                    g_control = FINISHED;
+            }
+        }
+
+        void QueueControlExperiment(bool dryRun)
+        {
+            if (g_control == WAIT_CLOSE || g_control == COUNTDOWN ||
+                g_control == PULSE || g_control == OBSERVE)
+            {
+                MessageBox("P006 experiment already queued",
+                    "Finish or abort the current experiment first.")();
+                return;
+            }
+            if (!dryRun && (!g_dryRunComplete || !g_physicalAbortVerified))
+            {
+                MessageBox("P006 real pulse LOCKED",
+                    "First complete one DRY RUN and separately ABORT another"
+                    " dry run using physical B/START. Both checks required.")();
+                return;
+            }
+            if (!g_ready || Process::GetTitleID() != MK7_USA)
+            {
+                MessageBox("P006 experiment unavailable",
+                    "READY and Mario Kart 7 USA are required.")();
+                return;
+            }
+            Probe();
+            PollEnvironment(true);
+            if (!ControllerExperimentOK() ||
+                g_observation.speed > 0.35f ||
+                g_observation.speed < -0.35f)
+            {
+                MessageBox("P006 test cannot arm",
+                    "Please be stationary on the ground in a Time Trial with valid telemetry.")();
+                return;
+            }
+            // Menu selection commonly uses A; check for key release later,
+            // once the menu has fully closed and no longer owns the input.
+            g_controlIsDryRun = dryRun;
+            g_control = WAIT_CLOSE;
+            g_controlNextAt = g_controlPulseStart = 0;
+            g_controlLastCallbackAt = 0;
+            g_controlWaitStartedAt = g_controlNeutralSince = 0;
+            g_controlObserveEndAt = 0;
+            g_pulseControlReads = 0;
+            g_pulseMk7AccelerateSeen = g_pulseMovedSeen = false;
+            MessageBox(dryRun ? "P006 DRY RUN queued" :
+                "P006 REAL HID TEST queued",
+                dryRun
+                ? "Release A/B/START after closing the menu."
+                  " A neutral-input interlock runs before the FIVE-SECOND countdown."
+                  " Resume MK7 using A/START in the first few seconds."
+                  " Release controls near zero; B aborts anytime."
+                : "CAUTION: this writes A into HID shared buffers briefly."
+                  " Game acceptance and key release are UNVERIFIED."
+                  " Close menu, resume MK7 within FIVE seconds,"
+                  " then release A/START. Physical B aborts at any time."
+                  " If controls stick, end MK7 and disable plugin.")();
+        }
+
+        void QueueDryRun(MenuEntry *) { QueueControlExperiment(true); }
+        void QueueRealPulse(MenuEntry *) { QueueControlExperiment(false); }
+
+        void CancelControl(MenuEntry *)
+        {
+            AbortControl("Manual menu cancellation");
+            MessageBox("P006 control experiment",
+                "Control experiment cancelled, no additional keys will be injected.")();
+        }
+
+        void ToggleProfiler(MenuEntry *)
+        {
+            g_profilerEnabled = !g_profilerEnabled;
+            g_prevCallbackAt = 0;
+            g_profileCallbackGapMs = g_profileCallbackWorkMs = 0;
+            g_profileProbeMs = g_profileMaxGapMs = g_profileMaxWorkMs = 0;
+            g_profileProbeUs = g_profileCallbackWorkUs = 0;
+            g_profileMaxWorkUs = g_environmentReadUs = 0;
+            g_profileCallbacks = g_profileLargeGaps = 0;
+            g_profileWorkTotalMs = 0;
+            MessageBox("P006 profiler", g_profilerEnabled
+                ? "ON. Compare READY off, READY+live telemetry, and recording."
+                : "OFF. Counters reset.")();
+        }
+
+        void ShowProfiler(MenuEntry *)
+        {
+            char msg[650];
+            std::snprintf(msg, sizeof(msg),
+                "Profiler: %s\n"
+                "Bottom OSD callbacks: %u\n"
+                "Gap last/max: %lu/%lu ms\n"
+                "Gaps >50ms: %u\n"
+                "Callback work last/max: %lu/%lu ms\n"
+                "Average callback work: %.2f ms\n"
+                "Full telemetry probe: %lu ms\n"
+                "Callback work: %lu us (max %lu)\n"
+                "Probe/env read: %lu/%lu us\n"
+                "Environment polls/fails: %u/%u\n"
+                "Control phase: %s\n"
+                "Dry-run passed: %s\n"
+                "Physical abort verified: %s\n"
+                "Release interlock: %s\n"
+                "HID injection calls: %u\n"
+                "Pulse control reads: %u\n"
+                "Accel bit seen: %s  Speed: %s\n"
+                "Manual A matches: %u/%u\n"
+                "Pad paused?: %s\n"
+                "Abort count: %u\n"
+                "Last abort: %s\n"
+                "MK7 control bits: %s 0x%08lX",
+                g_profilerEnabled ? "ON" : "OFF",
+                g_profileCallbacks,
+                static_cast<unsigned long>(g_profileCallbackGapMs),
+                static_cast<unsigned long>(g_profileMaxGapMs),
+                g_profileLargeGaps,
+                static_cast<unsigned long>(g_profileCallbackWorkMs),
+                static_cast<unsigned long>(g_profileMaxWorkMs),
+                g_profileCallbacks ? static_cast<float>(g_profileWorkTotalMs) /
+                    g_profileCallbacks : 0.0f,
+                static_cast<unsigned long>(g_profileProbeMs),
+                static_cast<unsigned long>(g_profileCallbackWorkUs),
+                static_cast<unsigned long>(g_profileMaxWorkUs),
+                static_cast<unsigned long>(g_profileProbeUs),
+                static_cast<unsigned long>(g_environmentReadUs),
+                g_envPolls, g_envReadFails, ControlName(g_control),
+                g_dryRunComplete ? "YES" : "NO",
+                g_physicalAbortVerified ? "YES" : "NO",
+                g_control == WAIT_CLOSE ? "WAITING" : "NOT WAITING",
+                g_hidInjectionCalls, g_pulseControlReads,
+                g_pulseMk7AccelerateSeen ? "YES" : "NO",
+                g_pulseMovedSeen ? "MOVED" : "NO",
+                g_manualAMatchedReads, g_manualAControlReads,
+                g_kdPadPauseKnown ? (g_kdPadPaused ? "YES*" : "NO*") : "UNKNOWN",
+                g_controlAborts,
+                g_lastAbortReason, g_vehicleControlsValid ? "READ" : "N/A",
+                static_cast<unsigned long>(g_vehicleControlsObserved));
+            MessageBox("P006 profiler and controls", msg)();
         }
 
         bool DrawStatus(const Screen &screen)
@@ -679,14 +1161,38 @@ namespace CTRPluginFramework
             if (screen.IsTop || !g_verified)
                 return true;
 
+            const u64 callbackTickStarted = g_profilerEnabled
+                ? svcGetSystemTick() : 0;
+            const u64 callbackStarted = osGetTime();
+            PluginMenu *runningMenu = PluginMenu::GetRunningInstance();
+            const bool menuOpen = runningMenu && runningMenu->IsOpen();
+            if (g_profilerEnabled && !menuOpen)
+            {
+                if (g_prevCallbackAt != 0 && callbackStarted >= g_prevCallbackAt)
+                {
+                    g_profileCallbackGapMs =
+                        static_cast<u32>(callbackStarted - g_prevCallbackAt);
+                    if (g_profileCallbackGapMs > g_profileMaxGapMs)
+                        g_profileMaxGapMs = g_profileCallbackGapMs;
+                    if (g_profileCallbackGapMs > 50)
+                        ++g_profileLargeGaps;
+                }
+                g_prevCallbackAt = callbackStarted;
+            }
+            else if (menuOpen)
+                g_prevCallbackAt = 0;
+
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P005 | READY" : "CK P005 | INACTIVE",
+            screen.Draw(g_ready ? "CK P006 | READY" : "CK P006 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
             // Only ~2Hz full pointer walks; <=10Hz lightweight flag reads.
-            if (g_ready && (g_live || g_recording))
+            if (!menuOpen && g_ready &&
+                (g_live || g_recording || g_control == WAIT_CLOSE ||
+                 g_control == COUNTDOWN || g_control == PULSE ||
+                 g_control == OBSERVE))
             {
                 const u64 now = osGetTime();
                 bool dueTelemetry = g_lastTelemetryAt == 0 ||
@@ -695,7 +1201,33 @@ namespace CTRPluginFramework
                 if (dueTelemetry)
                 {
                     g_lastTelemetryAt = now;
+                    const u64 probeStarted = osGetTime();
+                    const u64 probeTickStarted = g_profilerEnabled
+                        ? svcGetSystemTick() : 0;
                     Probe();
+                    if (g_profilerEnabled)
+                        g_profileProbeUs = ElapsedUs(probeTickStarted);
+                    const u64 probeEnded = osGetTime();
+                    g_profileProbeMs = probeEnded >= probeStarted
+                        ? static_cast<u32>(probeEnded - probeStarted) : 0;
+                    g_vehicleControlsValid = g_vehicleAddress != 0 &&
+                        ReadWord(g_vehicleAddress + 0xFC, g_vehicleControlsObserved);
+                    // KDPlayerPad::m_is_paused at +0x3D, candidate only.
+                    g_kdPadPauseKnown = false;
+                    g_kdPadPaused = false;
+                    u32 gamePad = 0;
+                    u8 gamePadPaused = 0;
+                    if (g_vehicleAddress != 0 &&
+                        ReadPointer(g_vehicleAddress + 0xE0, gamePad) &&
+                        Process::Read8(gamePad + 0x3D, gamePadPaused))
+                    {
+                        g_kdPadPauseKnown = true;
+                        g_kdPadPaused = gamePadPaused != 0;
+                    }
+                    // Compare physical A with MK7's own accelerate bit.
+                    if (g_control == DISARMED || g_control == FINISHED ||
+                        g_control == ABORTED)
+                        SampleGameControls(false);
                 }
                 if (g_lastEnvironmentAt == 0 ||
                     now < g_lastEnvironmentAt ||
@@ -704,9 +1236,14 @@ namespace CTRPluginFramework
                     g_lastEnvironmentAt = now;
                     PollEnvironment();
                 }
+                ControlStep(osGetTime(), false);
                 if (g_recording && dueTelemetry)
                     CaptureSample();
             }
+            // A queued test cannot silently survive losing READY or menu reopen.
+            else if (g_control == COUNTDOWN || g_control == PULSE ||
+                     g_control == OBSERVE)
+                AbortControl(menuOpen ? "Menu reopened" : "READY/sensing disabled");
             if (g_live && g_ready)
             {
                 char line[96];
@@ -748,6 +1285,37 @@ namespace CTRPluginFramework
                 screen.DrawRect(185, 224, 115, 14, Color::Black, true);
                 screen.Draw("BUFFER FULL", 187, 226, Color::Yellow, Color::Black);
             }
+            // New control-authority indicator, without shifting P001's HUD.
+            if (g_control == WAIT_CLOSE || g_control == COUNTDOWN ||
+                g_control == PULSE || g_control == OBSERVE ||
+                g_control == ABORTED)
+            {
+                screen.DrawRect(142, 196, 178, 13, Color::Black, true);
+                char phase[42];
+                if (g_control == COUNTDOWN && g_controlNextAt > osGetTime())
+                    std::snprintf(phase, sizeof(phase), "RACCOON IN %lus",
+                        static_cast<unsigned long>(
+                            (g_controlNextAt - osGetTime() + 999) / 1000));
+                else
+                    std::snprintf(phase, sizeof(phase), "%s",
+                        ControlName(g_control));
+                screen.Draw(phase, 145, 197,
+                    g_control == ABORTED ? Color::Yellow : Color::Green,
+                    Color::Black);
+            }
+            if (g_profilerEnabled && !menuOpen)
+            {
+                const u64 callbackDone = osGetTime();
+                g_profileCallbackWorkMs = callbackDone >= callbackStarted
+                    ? static_cast<u32>(callbackDone - callbackStarted) : 0;
+                if (g_profileCallbackWorkMs > g_profileMaxWorkMs)
+                    g_profileMaxWorkMs = g_profileCallbackWorkMs;
+                g_profileWorkTotalMs += g_profileCallbackWorkMs;
+                g_profileCallbackWorkUs = ElapsedUs(callbackTickStarted);
+                if (g_profileCallbackWorkUs > g_profileMaxWorkUs)
+                    g_profileMaxWorkUs = g_profileCallbackWorkUs;
+                ++g_profileCallbacks;
+            }
             return true;
         }
 
@@ -756,6 +1324,7 @@ namespace CTRPluginFramework
             g_ready = !g_ready;
             if (!g_ready)
             {
+                AbortControl("READY turned off");
                 g_recording = false; // Preserve unsaved data.
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
@@ -798,7 +1367,7 @@ namespace CTRPluginFramework
                 "\nLast CSV: " + g_lastFile +
                 "\nRace detection: NOT VERIFIED\n"
                 "Controls: DISABLED\nLearning: DISABLED";
-            MessageBox("Collie Kart P005 Diagnostics", msg)();
+            MessageBox("Collie Kart P006 Diagnostics", msg)();
         }
         void Snapshot(MenuEntry *)
         {
@@ -827,7 +1396,7 @@ namespace CTRPluginFramework
                     msg += "Speed: UNAVAILABLE\n";
             }
             msg += "\nCompare values against real gameplay.";
-            MessageBox("P005 Experimental Snapshot", msg)();
+            MessageBox("P006 Experimental Snapshot", msg)();
         }
 
         void ShowEnvironment(MenuEntry *)
@@ -875,7 +1444,7 @@ namespace CTRPluginFramework
                 static_cast<unsigned long>(g_modeMs[AIRBORNE] / 1000),
                 static_cast<unsigned long>(g_modeMs[GLIDING] / 1000),
                 g_latestReward, g_totalReward);
-            MessageBox("P005 Environment & Rewards", lines)();
+            MessageBox("P006 Environment & Rewards", lines)();
         }
     }
 
@@ -892,9 +1461,9 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P005", 0, 0, 5,
-            "Low-overhead pad fusion and passive rewards.\n"
-            "No game-memory writes or autonomous controls.");
+        PluginMenu menu("Collie Kart P006", 0, 0, 6,
+            "Profiler + one-shot experimental HID A pulse.\n"
+            "Inputs unverified; no learning or MK7 RAM writes.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
@@ -911,6 +1480,16 @@ namespace CTRPluginFramework
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
             "Stop capturing and save a new CSV under SD:/CollieKart.");
+        menu += new MenuEntry("Toggle performance profiler", nullptr, ToggleProfiler,
+            "Read-only OSD callback, full-probe and environment timings.");
+        menu += new MenuEntry("Profiler & control diagnostics", nullptr, ShowProfiler,
+            "Frame callback timing, experimental control status and abort reason.");
+        menu += new MenuEntry("Queue DRY RUN (no input)", nullptr, QueueDryRun,
+            "Countdown test with NO artificial buttons. Test physical B abort.");
+        menu += new MenuEntry("Queue REAL A pulse (EXPERIMENT)", nullptr, QueueRealPulse,
+            "One-shot 80ms maximum HID-key experiment; first pass dry-run.");
+        menu += new MenuEntry("ABORT control experiment", nullptr, CancelControl,
+            "Cancel any queued experiment. Physical B/START also abort.");
         OSD::Run(DrawStatus);
         menu.Run();
         OSD::Stop(DrawStatus);
