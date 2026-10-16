@@ -1,24 +1,50 @@
-# Collie Kart Portable — P002 (experimental telemetry)
+# Collie Kart Portable — P003 Flight Recorder
 
-P001 has been verified to load on a real New 3DS running USA Mario Kart 7, draw the bottom-left status line, toggle READY/INACTIVE, show diagnostics, and continue working during a Time Trial.
+**Development build. Back up your known-working P002 .3gx before testing.**
 
-P002 preserves its approved indicator position, with no autonomous controls, learning, game-memory writes, or file writes. It adds opt-in *read-only* telemetry from an **unverified hypothesis** based on [mk7re/MK7-Emu-Scripts](https://github.com/mk7re/MK7-Emu-Scripts), specifically common.py, Vehicle.py, and LapRankChecker.py. Those scripts were tested in Citra, **not on actual 3DS hardware**.
+P001 passed its bottom-screen indicator, toggle, diagnostics, and Time Trial tests on real New 3DS hardware. P002 also showed live lap/checkpoint/progress/speed readings that the tester reported changed appropriately during Time Trial, with no stuttering or other unusual behavior.
 
-## What to test
+P003 keeps the same approved indicator position, game-specific checks, and telemetry. It adds a **manual, opt-in flight recorder**. It never takes control of the kart or writes to MK7 game memory.
 
-1. **First back up your working P001 .3gx!** P002 is experimental native code and could freeze the game.
-2. Download the successful "Collie-Kart-P002-3GX" GitHub Actions artifact, extract the compiled file, rename to CollieKart.3gx, and replace the P001 file in the verified USA folder: SD:/luma/plugins/0004000000030800/CollieKart.3gx. Do not install alongside other MK7 plugins.
-3. Launch MK7. Confirm "CK P002 | INACTIVE" appears at exactly the same bottom-left location as P001.
-4. Select -> plugin menu -> "Read telemetry snapshot" while on the **main menu**. Note the diagnostic stage; absence of a race is expected.
-5. Enter a solo Time Trial (Toad Circuit). Before moving, open "Read telemetry snapshot" again. Record any lap, checkpoint, progress, position and speed values; unknown/unavailable is a useful result.
-6. If values appear reasonable, set READY and enable "Toggle live telemetry". When the menu closes, an optional yellow line appears directly above the status label. "OBS?" explicitly means **unverified observations**. Drive a short distance and assess if checkpoint, completion and speed change appropriately.
-7. Test returning to MK7 menus and exiting the game. Observe flicker/frame-rate impact and report unexpected crashes. If unstable, disable Plugin Loader, remove P002 and restore P001 from your backup.
+## How recording works
 
-## Important limits
+1. Set **READY** in the plugin menu.
+2. In Mario Kart 7 **Time Trial**, select **Start recording** from the CTRPF menu.
+3. Close the menu and drive. The plugin buffers readings in RAM around **twice per second** while you play. Disk writes do not happen in the racing loop.
+4. When finished, reopen the plugin menu and choose **Stop & Save CSV**.
+5. The plugin creates **SD:/CollieKart/session_001.csv**, then session_002.csv, and so on. It will not intentionally overwrite a prior session.
+6. Remove the microSD after properly powering off the console, or retrieve the CSV with FTPD on a local Wi-Fi network. Open the CSV in your iPhone's Files app / spreadsheet viewer or share it with ChatGPT for analysis.
 
-- Currently only USA telemetry addresses are attempted; other MK7 regional copies retain the display but their telemetry reads are disabled.
-- The static pointer hypothesis comes from the USA rev1/rev2 Citra scripts and **may not fit MK7 2.4.0 running on this console**.
-- The probe uses Process::ReadXX APIs and pointer/range validation. These reduce risk but cannot guarantee stability.
-- Incomplete or nonsensical results should be reported, **not interpreted as real telemetry**.
-- P002 deliberately does **not** claim to detect an active race yet, does not perform AI training, and does not write any files to SD. We'll add those only after physical validation.
-- Keep the plugin on a separate P002 development branch; do not merge until tested.
+**Save is manual.** Turning off READY stops recording but retains the buffered session. If the console crashes or powers off before **Stop & Save CSV**, unsaved samples are lost.
+
+### Recording limits
+
+- Buffer capacity: **1,800 samples** (about **15 minutes** at 2 Hz).
+- When full, recording automatically stops; **BUFFER FULL** appears. Choose Stop & Save CSV to retain the collected session.
+- Invalid readings are preserved as rows with `valid=0` and a failure stage, rather than silently masquerading as true telemetry.
+- Timestamps are milliseconds since recording started, including time spent in the plugin menu. They are not guaranteed to correspond exactly to in-game elapsed time.
+- CSV columns: `elapsed_ms,valid,lap,checkpoint,completion,max_completion,pos_x,pos_y,pos_z,speed_valid,speed_game_units,probe_stage`.
+- Speed uses **internal game units**, not automatically km/h or mph.
+- Only the **USA** MK7 memory layout is currently supported. The program cannot yet automatically identify a genuine Time Trial; only start recording while inside one.
+- Stop & Save performs file operations while the CTRPF menu is open. If saving fails, an incomplete file may remain and samples are kept in RAM for a retry, provided the plugin remains running.
+
+## Installation
+
+1. Download the successful **Collie-Kart-P003-3GX** artifact and unzip it on your iPhone.
+2. **Back up P002's working CollieKart.3gx** somewhere safe, preferably outside the SD card.
+3. Rename the new `CTRPluginFramework-BlankTemplate.3gx` to `CollieKart.3gx`.
+4. Shut down MK7 and power off the 3DS. Replace the plugin in:
+   `SD:/luma/plugins/0004000000030800/CollieKart.3gx` (USA MK7, Title ID previously confirmed by FBI).
+5. Launch MK7 with the 3GX Plugin Loader enabled. The plugin should show `CK P003 | INACTIVE` at the familiar bottom-left position.
+6. First verify the P001/P002 toggles and telemetry. Record a **short 30–60 second drive** before attempting longer logs.
+7. After Stop & Save, confirm the CSV is actually present and contains plausible changing values. No successful save has been verified on physical hardware yet.
+
+## Recovery
+
+In case of crash, unusual FPS behavior, or save errors: disable Plugin Loader and restore your **P002** plugin backup; then report what happened. Do not merge the development branch until actual P003 save/reload tests pass.
+
+### Source notes
+
+Telemetry was adapted from [mk7re/MK7-Emu-Scripts](https://github.com/mk7re/MK7-Emu-Scripts), whose published version explicitly says it was tested in Citra, not physical 3DS hardware. The user has confirmed plausible responding values from P002 on their actual console, but edge cases and calibration remain unverified.
+
+CTRPluginFramework's `Directory` and `File` SD-card APIs are used to keep file operations outside the game-rendering loop. The only filesystem writes are under `/CollieKart` when **Stop & Save CSV** is explicitly selected.
