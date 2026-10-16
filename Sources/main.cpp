@@ -1,6 +1,7 @@
-// Collie Kart Portable P002 -- experimental read-only MK7 telemetry.
-// No game-memory writes, SD writes, controller injection, or learning.
-// Pointer layout is a hypothesis from mk7re/MK7-Emu-Scripts (Citra).
+// Collie Kart Portable P004 -- passive environment and reward diagnostics.
+// No game-memory writes, controller injection, or machine learning.
+// P002 telemetry and P003's optional SD CSV saving are retained.
+// Mode flags from mk7re/MK7-Memory: candidate until hardware validated.
 
 #include <3ds.h>
 #include <CTRPluginFramework.hpp>
@@ -42,6 +43,70 @@ namespace CTRPluginFramework
         };
         Observation g_observation;
 
+        // Mode classification and candidate MK7 VehicleMove flags.
+        enum Mode { UNKNOWN = 0, GROUND = 1, UNDERWATER = 2,
+                    AIRBORNE = 3, GLIDING = 4 };
+        const char *ModeName(Mode m)
+        {
+            switch (m)
+            {
+                case GROUND: return "GROUND";
+                case UNDERWATER: return "UNDERWATER";
+                case AIRBORNE: return "AIRBORNE";
+                case GLIDING: return "GLIDING";
+                default: return "UNKNOWN";
+            }
+        }
+
+        struct Environment
+        {
+            bool valid = false;
+            Mode mode = UNKNOWN;
+            u32 statusFlags = 0, boostFlags = 0;
+            u32 airFrames = 0, groundFrames = 0;
+            u32 surfaceCode = 0xFFFFFFFF;
+            u32 dashType = 0xFFFFFFFF;
+        };
+        Environment g_environment;
+        u32 g_vehicleAddress = 0;
+        bool g_havePreviousFlags = false;
+        u32 g_previousStatus = 0, g_previousBoost = 0;
+        u64 g_previousModeAt = 0;
+        Mode g_previousMode = UNKNOWN;
+        unsigned g_gliderPadActivations = 0, g_boostPadActivations = 0;
+        unsigned g_gliderDeployments = 0, g_forceCloseSignals = 0;
+        unsigned g_airClosures = 0, g_landingClosures = 0;
+        u32 g_modeMs[5] = {0, 0, 0, 0, 0};
+
+        // The reward evaluator is PASSIVE. Only new max progress receives
+        // forward reward; repeated traversal of old progress does not.
+        bool g_rewardAnchored = false;
+        float g_previousRewardMaximum = 0;
+        int g_previousRewardLap = 0;
+        u32 g_previousRewardAt = 0;
+        float g_totalReward = 0;
+        float g_latestReward = 0;
+
+        void ResetEnvironmentSession()
+        {
+            g_environment = Environment();
+            g_vehicleAddress = 0;
+            g_havePreviousFlags = false;
+            g_previousStatus = g_previousBoost = 0;
+            g_previousModeAt = 0;
+            g_previousMode = UNKNOWN;
+            g_gliderPadActivations = g_boostPadActivations = 0;
+            g_gliderDeployments = g_forceCloseSignals = 0;
+            g_airClosures = g_landingClosures = 0;
+            for (unsigned i = 0; i < 5; ++i)
+                g_modeMs[i] = 0;
+            g_rewardAnchored = false;
+            g_previousRewardMaximum = 0;
+            g_previousRewardLap = 0;
+            g_previousRewardAt = 0;
+            g_totalReward = g_latestReward = 0;
+        }
+
         // RAM-only buffer: 2 samples/sec x 15 minutes maximum.
         // No filesystem writes happen from DrawStatus or Probe.
         constexpr unsigned MAX_LOG_SAMPLES = 1800;
@@ -49,6 +114,12 @@ namespace CTRPluginFramework
         {
             u32 elapsedMs = 0;
             Observation value;
+            Environment environment;
+            float rewardProgress = 0, rewardTime = 0, rewardLap = 0;
+            float rewardTotal = 0, cumulativeReward = 0;
+            unsigned gliderPads = 0, boostPads = 0, deployments = 0;
+            unsigned forceClosures = 0, midairClosures = 0, landedClosures = 0;
+            u32 durationMs[5] = {0, 0, 0, 0, 0};
         };
         Record g_records[MAX_LOG_SAMPLES];
         unsigned g_count = 0;
@@ -62,7 +133,58 @@ namespace CTRPluginFramework
             u64 now = osGetTime();
             r.elapsedMs = now >= g_startedMs
                           ? static_cast<u32>(now - g_startedMs) : 0;
+
             r.value = g_observation;
+            r.environment = g_environment;
+            r.gliderPads = g_gliderPadActivations;
+            r.boostPads = g_boostPadActivations;
+            r.deployments = g_gliderDeployments;
+            r.forceClosures = g_forceCloseSignals;
+            r.midairClosures = g_airClosures;
+            r.landedClosures = g_landingClosures;
+            for (unsigned i = 0; i < 5; ++i)
+                r.durationMs[i] = g_modeMs[i];
+
+            if (r.value.candidate)
+            {
+                if (!g_rewardAnchored)
+                {
+                    g_rewardAnchored = true;
+                    g_previousRewardMaximum = r.value.maxProgress;
+                    g_previousRewardLap = r.value.lap;
+                    g_previousRewardAt = r.elapsedMs;
+                }
+                else
+                {
+                    // Genuine progress and valid lap transitions will be
+                    // checked against real-time gameplay before training.
+                    float delta = r.value.maxProgress - g_previousRewardMaximum;
+                    float seconds = r.elapsedMs >= g_previousRewardAt
+                        ? (r.elapsedMs - g_previousRewardAt) * 0.001f : 0.0f;
+                    // Ignore menu pauses/huge intervals for time penalties.
+                    if (seconds <= 3.0f)
+                        r.rewardTime = -0.1f * seconds;
+                    // Reject abrupt progress jumps or backwards max readings.
+                    if (delta > 0.0f && delta <= 0.10f)
+                        r.rewardProgress = 100.0f * delta;
+                    // Count one upward lap transition at most, not a reset.
+                    if (r.value.lap == g_previousRewardLap + 1 &&
+                        delta >= 0.0f && delta <= 0.10f)
+                        r.rewardLap = 20.0f;
+
+                    if (r.value.maxProgress >= g_previousRewardMaximum)
+                        g_previousRewardMaximum = r.value.maxProgress;
+                    g_previousRewardLap = r.value.lap;
+                    g_previousRewardAt = r.elapsedMs;
+                }
+            }
+            // No automatic brake/glider penalties yet: no reliable
+            // brake-to-closure causal detector is implemented.
+            r.rewardTotal = r.rewardProgress + r.rewardTime + r.rewardLap;
+            g_totalReward += r.rewardTotal;
+            r.cumulativeReward = g_totalReward;
+            g_latestReward = r.rewardTotal;
+
             if (!r.value.candidate)
                 ++g_invalidSamples;
 
@@ -78,13 +200,13 @@ namespace CTRPluginFramework
             if (!g_verified || Process::GetTitleID() != MK7_USA)
             {
                 MessageBox("Recorder unavailable",
-                    "P003's memory layout is currently supported only for MK7 USA.")();
+                    "P004's memory layout is currently supported only for MK7 USA.")();
                 return;
             }
             if (!g_ready)
             {
                 MessageBox("Recorder inactive",
-                    "First toggle CK P003 to READY, then start recording.")();
+                    "First toggle CK P004 to READY, then start recording.")();
                 return;
             }
             if (g_recording)
@@ -106,6 +228,7 @@ namespace CTRPluginFramework
             g_frames = 0;
             g_invalidSamples = 0;
             g_observation = Observation();
+            ResetEnvironmentSession();
             MessageBox("Flight recorder started",
                 "Close the plugin menu and drive a short Time Trial.\n"
                 "When finished, open this menu and choose Stop & Save.")();
@@ -170,15 +293,25 @@ namespace CTRPluginFramework
 
             bool saved = (csv.WriteLine(
                 "elapsed_ms,valid,lap,checkpoint,completion,max_completion,"
-                "pos_x,pos_y,pos_z,speed_valid,speed_game_units,probe_stage") == File::SUCCESS);
+                "pos_x,pos_y,pos_z,speed_valid,speed_game_units,probe_stage,"
+                "mode,mode_valid,status_flags,boost_flags,air_frames,ground_frames,"
+                "surface_code,dash_type,glider_pad_activations,boost_pad_activations,"
+                "glider_deployments,force_close_signals,midair_glider_closures,"
+                "landing_glider_closures,ground_ms,underwater_ms,airborne_ms,gliding_ms,"
+                "reward_progress,reward_time,reward_lap,reward_total,"
+                "reward_cumulative") == File::SUCCESS);
 
-            char line[260];
+            char line[700];
             for (unsigned i = 0; saved && i < g_count; ++i)
             {
                 const Record &r = g_records[i];
                 const Observation &v = r.value;
+                const Environment &e = r.environment;
                 int length = std::snprintf(line, sizeof(line),
-                    "%lu,%d,%d,%u,%.6f,%.6f,%.3f,%.3f,%.3f,%d,%.4f,%s",
+                    "%lu,%d,%d,%u,%.6f,%.6f,%.3f,%.3f,%.3f,%d,%.4f,%s,"
+                    "%s,%d,0x%08lX,0x%08lX,%lu,%lu,%lu,%lu,"
+                    "%u,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
+                    "%.4f,%.4f,%.4f,%.4f,%.4f",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -190,7 +323,22 @@ namespace CTRPluginFramework
                     v.candidate ? v.z : 0.0f,
                     v.speedValid ? 1 : 0,
                     v.speedValid ? v.speed : 0.0f,
-                    v.stage);
+                    v.stage,
+                    ModeName(e.mode), e.valid ? 1 : 0,
+                    static_cast<unsigned long>(e.statusFlags),
+                    static_cast<unsigned long>(e.boostFlags),
+                    static_cast<unsigned long>(e.airFrames),
+                    static_cast<unsigned long>(e.groundFrames),
+                    static_cast<unsigned long>(e.surfaceCode),
+                    static_cast<unsigned long>(e.dashType),
+                    r.gliderPads, r.boostPads, r.deployments,
+                    r.forceClosures, r.midairClosures, r.landedClosures,
+                    static_cast<unsigned long>(r.durationMs[GROUND]),
+                    static_cast<unsigned long>(r.durationMs[UNDERWATER]),
+                    static_cast<unsigned long>(r.durationMs[AIRBORNE]),
+                    static_cast<unsigned long>(r.durationMs[GLIDING]),
+                    r.rewardProgress, r.rewardTime, r.rewardLap,
+                    r.rewardTotal, r.cumulativeReward);
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -243,6 +391,7 @@ namespace CTRPluginFramework
         {
             ++g_samples;
             Observation o;
+            g_vehicleAddress = 0;
 
             if (Process::GetTitleID() != MK7_USA)
             {
@@ -311,12 +460,103 @@ namespace CTRPluginFramework
             if (ReadPointer(collection + 0x10, director) &&
                 ReadPointer(director + 0x2C, units) &&
                 ReadPointer(units + player * 4, unit) &&
-                ReadPointer(unit + 0x2C, vehicle) &&
-                ReadNumber(vehicle + 0xF2C, o.speed) &&
-                o.speed >= -20.0f && o.speed < 500.0f)
-                o.speedValid = true;
+                ReadPointer(unit + 0x2C, vehicle))
+            {
+                g_vehicleAddress = vehicle;
+                if (ReadNumber(vehicle + 0xF2C, o.speed) &&
+                    o.speed >= -20.0f && o.speed < 500.0f)
+                    o.speedValid = true;
+            }
 
             g_observation = o;
+        }
+
+
+        // Poll frequently, in RAM only. Rising edges avoid counting one pad
+        // for every game frame that its flag remains active.
+        void PollEnvironment()
+        {
+            Environment next;
+            if (g_vehicleAddress == 0 || !g_observation.candidate)
+            {
+                g_environment = next;
+                g_havePreviousFlags = false;
+                g_previousModeAt = 0;
+                return;
+            }
+
+            const u32 v = g_vehicleAddress;
+            if (!ReadWord(v + 0xC30, next.statusFlags) ||
+                !ReadWord(v + 0xC28, next.boostFlags) ||
+                !ReadWord(v + 0xD48, next.airFrames) ||
+                !ReadWord(v + 0xD50, next.groundFrames))
+            {
+                g_environment = next;
+                g_havePreviousFlags = false;
+                g_previousModeAt = 0;
+                return;
+            }
+
+            // Optional research fields. Unknown = 0xFFFFFFFF.
+            u32 raw = 0;
+            if (ReadWord(v + 0xD14, raw) && raw <= 31)
+                next.surfaceCode = raw;
+            if (ReadWord(v + 0xF98, raw) && raw <= 8)
+                next.dashType = raw;
+
+            next.valid = true;
+            if ((next.statusFlags & 0x80) != 0)
+                next.mode = GLIDING;
+            else if ((next.statusFlags & 0x1000) != 0)
+                next.mode = UNDERWATER;
+            else if (next.airFrames > 1 && next.groundFrames == 0)
+                next.mode = AIRBORNE;
+            else if (next.groundFrames > 0)
+                next.mode = GROUND;
+            else
+                next.mode = UNKNOWN;
+
+            u64 now = osGetTime();
+            // Exclude menu pauses from accumulated state durations; prevent
+            // stale flag-edge events after unexpectedly long polling gaps.
+            bool continuous = g_previousModeAt != 0 &&
+                now >= g_previousModeAt && now - g_previousModeAt <= 200;
+            if (g_recording && continuous && g_previousMode > UNKNOWN &&
+                g_previousMode <= GLIDING)
+                g_modeMs[g_previousMode] += static_cast<u32>(now - g_previousModeAt);
+
+            if (g_recording && g_havePreviousFlags && continuous)
+            {
+                const u32 risingStatus = next.statusFlags & ~g_previousStatus;
+                const u32 risingBoost = next.boostFlags & ~g_previousBoost;
+
+                if (risingStatus & 0x100)
+                    ++g_gliderPadActivations;
+                if (risingBoost & 0x2)
+                    ++g_boostPadActivations;
+                if (risingStatus & 0x80)
+                    ++g_gliderDeployments;
+                if (risingStatus & 0x400)
+                    ++g_forceCloseSignals;
+
+                // End-of-glide classification is a hypothesis:
+                // landing and midair closures are NOT yet penalties.
+                if ((g_previousStatus & 0x80) &&
+                    !(next.statusFlags & 0x80))
+                {
+                    if (next.groundFrames > 0)
+                        ++g_landingClosures;
+                    else
+                        ++g_airClosures;
+                }
+            }
+
+            g_environment = next;
+            g_previousStatus = next.statusFlags;
+            g_previousBoost = next.boostFlags;
+            g_previousMode = next.mode;
+            g_previousModeAt = now;
+            g_havePreviousFlags = true;
         }
 
         bool DrawStatus(const Screen &screen)
@@ -326,7 +566,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P003 | READY" : "CK P003 | INACTIVE",
+            screen.Draw(g_ready ? "CK P004 | READY" : "CK P004 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Sharing the same probe avoids duplicate reads when showing
@@ -334,11 +574,12 @@ namespace CTRPluginFramework
             if (g_ready && (g_live || g_recording))
             {
                 if (++g_frames % 30 == 0)
-                {
                     Probe();
-                    if (g_recording)
-                        CaptureSample();
-                }
+                // Lightweight candidate flag polling once per display frame.
+                // Avoid capturing new CSV rows until mode was polled.
+                PollEnvironment();
+                if (g_recording && g_frames % 30 == 0)
+                    CaptureSample();
             }
             if (g_live && g_ready)
             {
@@ -360,6 +601,14 @@ namespace CTRPluginFramework
                     std::snprintf(line, sizeof(line), "OBS? NO DATA -- see diagnostics");
                 screen.DrawRect(2, 211, 299, 12, Color::Black, true);
                 screen.Draw(line, 5, 212, Color::Yellow, Color::Black);
+                // State label is drawn only when optional telemetry is ON.
+                // It shares the right HUD area when NOT recording.
+                if (!g_recording)
+                {
+                    screen.DrawRect(185, 224, 115, 14, Color::Black, true);
+                    screen.Draw(ModeName(g_environment.mode), 187, 226,
+                                Color::Yellow, Color::Black);
+                }
             }
             if (g_recording && g_ready)
             {
@@ -380,7 +629,11 @@ namespace CTRPluginFramework
         {
             g_ready = !g_ready;
             if (!g_ready)
-                g_recording = false; // Stop, but never discard pending data.
+            {
+                g_recording = false; // Preserve unsaved data.
+                g_havePreviousFlags = false;
+                g_previousModeAt = 0;
+            }
             ++g_toggles;
         }
         void ToggleLive(MenuEntry *)
@@ -388,6 +641,10 @@ namespace CTRPluginFramework
             g_live = !g_live;
             g_frames = 0;
             g_observation = Observation();
+            g_vehicleAddress = 0;
+            g_environment = Environment();
+            g_havePreviousFlags = false;
+            g_previousModeAt = 0;
         }
         void ShowDiagnostics(MenuEntry *)
         {
@@ -401,10 +658,14 @@ namespace CTRPluginFramework
                 "\nRecorder: " + (g_recording ? "RECORDING" : "STOPPED") +
                 "\nBuffered rows: " + std::to_string(g_count) +
                 "\nInvalid rows: " + std::to_string(g_invalidSamples) +
+                "\nMode: " + ModeName(g_environment.mode) +
+                "\nPads glide/boost: " + std::to_string(g_gliderPadActivations) +
+                    "/" + std::to_string(g_boostPadActivations) +
+                "\nReward total (test): " + std::to_string(g_totalReward) +
                 "\nLast CSV: " + g_lastFile +
                 "\nRace detection: NOT VERIFIED\n"
                 "Controls: DISABLED\nLearning: DISABLED";
-            MessageBox("Collie Kart P003 Diagnostics", msg)();
+            MessageBox("Collie Kart P004 Diagnostics", msg)();
         }
         void Snapshot(MenuEntry *)
         {
@@ -433,7 +694,45 @@ namespace CTRPluginFramework
                     msg += "Speed: UNAVAILABLE\n";
             }
             msg += "\nCompare values against real gameplay.";
-            MessageBox("P003 Experimental Snapshot", msg)();
+            MessageBox("P004 Experimental Snapshot", msg)();
+        }
+
+        void ShowEnvironment(MenuEntry *)
+        {
+            // Menu is paused: attempt a fresh, read-only snapshot first.
+            Probe();
+            PollEnvironment();
+            const Environment &e = g_environment;
+            char lines[560];
+            std::snprintf(lines, sizeof(lines),
+                "Mode: %s (%s)\n"
+                "Flags: status 0x%08lX boost 0x%08lX\n"
+                "Air frames: %lu  Ground frames: %lu\n"
+                "KCL surface: %lu  Dash type: %lu\n"
+                "Glide pads: %u  Boost pads: %u\n"
+                "Glider deploys: %u\n"
+                "Force-close flag: %u\n"
+                "Midair closes: %u  Land closes: %u\n"
+                "Ground: %lus  Water: %lus\n"
+                "Air: %lus  Glide: %lus\n"
+                "Last reward: %.3f  Total: %.3f\n"
+                "Manual brake penalty: NOT ENABLED",
+                ModeName(e.mode), e.valid ? "candidate" : "NO DATA",
+                static_cast<unsigned long>(e.statusFlags),
+                static_cast<unsigned long>(e.boostFlags),
+                static_cast<unsigned long>(e.airFrames),
+                static_cast<unsigned long>(e.groundFrames),
+                static_cast<unsigned long>(e.surfaceCode),
+                static_cast<unsigned long>(e.dashType),
+                g_gliderPadActivations, g_boostPadActivations,
+                g_gliderDeployments, g_forceCloseSignals,
+                g_airClosures, g_landingClosures,
+                static_cast<unsigned long>(g_modeMs[GROUND] / 1000),
+                static_cast<unsigned long>(g_modeMs[UNDERWATER] / 1000),
+                static_cast<unsigned long>(g_modeMs[AIRBORNE] / 1000),
+                static_cast<unsigned long>(g_modeMs[GLIDING] / 1000),
+                g_latestReward, g_totalReward);
+            MessageBox("P004 Environment & Rewards", lines)();
         }
     }
 
@@ -450,8 +749,8 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P003", 0, 0, 3,
-            "Passive buffered SD recorder.\n"
+        PluginMenu menu("Collie Kart P004", 0, 0, 4,
+            "Passive environment and reward evaluation.\n"
             "No game-memory writes or autonomous controls.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
@@ -463,6 +762,8 @@ namespace CTRPluginFramework
             "Attempt a single read-only game-memory snapshot.");
         menu += new MenuEntry("Toggle live telemetry", nullptr, ToggleLive,
             "Opt-in sampled observations, only while READY.");
+        menu += new MenuEntry("Environment & rewards", nullptr, ShowEnvironment,
+            "Read candidate driving mode, pad activations and reward counters.");
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
