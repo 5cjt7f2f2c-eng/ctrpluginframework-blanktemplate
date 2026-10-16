@@ -943,20 +943,20 @@ namespace CTRPluginFramework
         {
             char msg[650];
             std::snprintf(msg, sizeof(msg),
-                "Profiler: %s\\n"
-                "Bottom OSD callbacks: %u\\n"
-                "Gap last/max: %lu/%lu ms\\n"
-                "Gaps >50ms: %u\\n"
-                "Callback work last/max: %lu/%lu ms\\n"
-                "Average callback work: %.2f ms\\n"
-                "Full telemetry probe: %lu ms\\n"
-                "Environment polls/fails: %u/%u\\n"
-                "Control phase: %s\\n"
-                "Dry-run passed: %s\\n"
-                "Physical abort verified: %s\\n"
-                "HID injection calls: %u\\n"
-                "Abort count: %u\\n"
-                "Last abort: %s\\n"
+                "Profiler: %s\n"
+                "Bottom OSD callbacks: %u\n"
+                "Gap last/max: %lu/%lu ms\n"
+                "Gaps >50ms: %u\n"
+                "Callback work last/max: %lu/%lu ms\n"
+                "Average callback work: %.2f ms\n"
+                "Full telemetry probe: %lu ms\n"
+                "Environment polls/fails: %u/%u\n"
+                "Control phase: %s\n"
+                "Dry-run passed: %s\n"
+                "Physical abort verified: %s\n"
+                "HID injection calls: %u\n"
+                "Abort count: %u\n"
+                "Last abort: %s\n"
                 "MK7 control bits: %s 0x%08lX",
                 g_profilerEnabled ? "ON" : "OFF",
                 g_profileCallbacks,
