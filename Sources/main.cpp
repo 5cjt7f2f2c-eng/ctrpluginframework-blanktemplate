@@ -67,6 +67,7 @@ namespace CTRPluginFramework
         }
         ControlPhase g_control = DISARMED;
         bool g_dryRunComplete = false;
+        bool g_physicalAbortVerified = false;
         bool g_controlIsDryRun = true;
         u64 g_controlNextAt = 0, g_controlPulseStart = 0;
         u64 g_controlLastCallbackAt = 0;
@@ -752,6 +753,8 @@ namespace CTRPluginFramework
                 g_control = ABORTED;
                 g_lastAbortReason = reason;
                 ++g_controlAborts;
+                if (reason && reason[0] == 'B' && reason[1] == '/')
+                    g_physicalAbortVerified = true;
                 // Do not inject any further artificial input.
                 g_controlNextAt = 0;
                 g_controlPulseStart = 0;
@@ -868,10 +871,11 @@ namespace CTRPluginFramework
                     "Finish or abort the current experiment first.")();
                 return;
             }
-            if (!dryRun && !g_dryRunComplete)
+            if (!dryRun && (!g_dryRunComplete || !g_physicalAbortVerified))
             {
                 MessageBox("P006 real pulse LOCKED",
-                    "First complete the dry-run experiment and verify the B/START abort.")();
+                    "First complete one DRY RUN and separately ABORT another"
+                    " dry run using physical B/START. Both checks required.")();
                 return;
             }
             if (!g_ready || Process::GetTitleID() != MK7_USA)
@@ -949,6 +953,7 @@ namespace CTRPluginFramework
                 "Environment polls/fails: %u/%u\\n"
                 "Control phase: %s\\n"
                 "Dry-run passed: %s\\n"
+                "Physical abort verified: %s\\n"
                 "HID injection calls: %u\\n"
                 "Abort count: %u\\n"
                 "Last abort: %s\\n"
@@ -965,6 +970,7 @@ namespace CTRPluginFramework
                 static_cast<unsigned long>(g_profileProbeMs),
                 g_envPolls, g_envReadFails, ControlName(g_control),
                 g_dryRunComplete ? "YES" : "NO",
+                g_physicalAbortVerified ? "YES" : "NO",
                 g_hidInjectionCalls, g_controlAborts,
                 g_lastAbortReason, g_vehicleControlsValid ? "READ" : "N/A",
                 static_cast<unsigned long>(g_vehicleControlsObserved));
