@@ -1090,8 +1090,10 @@ namespace CTRPluginFramework
                     g_controlObserveEndAt = now + FIRST_CONTACT_OBSERVE_MS;
                     return;
                 }
-                Controller::InjectKey(static_cast<u32>(Key::A));
-                ++g_hidInjectionCalls;
+                // P006.1 is strictly READ ONLY. Real HID injection is
+                // deliberately disabled, even if control phase were reached.
+                AbortControl("P006.1 injection disabled");
+                return;
             }
             if (g_control == OBSERVE)
             {
