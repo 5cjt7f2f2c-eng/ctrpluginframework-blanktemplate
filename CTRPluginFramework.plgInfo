@@ -3,21 +3,21 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 4
+    Revision: 5
 
 Targets:
 
-Title: Collie Kart Portable P004
+Title: Collie Kart Portable P005
 
-Summary: Passive MK7 environmental states and reward evaluation
+Summary: Passive MK7 sensor fusion, rewards and performance diagnostics
 
 Description: |
-    Extends P003 buffered CSV telemetry with experimental ground,
-    underwater, airborne, gliding classification and separate
-    glider-pad and ordinary boost-pad activations. Calculates
-    provisional progress/time/lap rewards only; no driver,
-    machine learning, game-memory writes or automatic saving.
-    These new mode signals require real 3DS verification.
+    Extends the MK7 flight recorder with fused normal dash-panel
+    detection, time-based lower-overhead telemetry polling, passive
+    B/brake correlation, and raw sensor/performance CSV diagnostics.
+    Provisional progress/time/lap reward weights are unchanged.
+    No controller injection, game-memory edits, autonomous driving,
+    training, or in-race file writes.
 
 Compatibility: Any
 
