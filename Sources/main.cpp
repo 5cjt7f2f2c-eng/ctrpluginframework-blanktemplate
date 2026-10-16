@@ -1,4 +1,4 @@
-// Collie Kart Portable P006 -- experimental profiling and first-contact HID.
+// Collie Kart Portable P006.1 -- read-only KDPad input pipeline examination.
 // No writes to MK7 process memory or autonomous steering / machine learning.
 // One opt-in HID InjectKey(A) experiment after a full dry-run; release not yet
 // hardware-verified, so each experiment is isolated and deliberately short.
@@ -105,6 +105,19 @@ namespace CTRPluginFramework
         u64 g_controlWaitStartedAt = 0, g_controlNeutralSince = 0;
         u32 g_vehicleControlsObserved = 0;
         bool g_vehicleControlsValid = false;
+        bool g_traceInput = false;
+        u64 g_lastInputTraceAt = 0;
+        struct PadTrace {
+            bool valid = false;
+            u32 kdButtonsAndStick = 0, kdRawButtons = 0, kdAddin = 0;
+            u32 vehicleControls = 0;
+            u8 padType = 255, padPaused = 255;
+            float steer = 0;
+            bool physicalA = false;
+        };
+        PadTrace g_padTrace;
+        unsigned g_padPolls = 0, g_padFails = 0, g_padPhysicalA = 0;
+        unsigned g_padAMatches = 0, g_vehicleAMatches = 0, g_allAMatches = 0;
 
         struct Observation
         {
@@ -225,6 +238,9 @@ namespace CTRPluginFramework
             unsigned pulseInputReads = 0, manualAConfirmed = 0;
             bool pulseAccelSeen = false, pulseMoved = false;
             bool padPauseKnown = false, padPaused = false;
+            PadTrace padTrace;
+            unsigned padPolls = 0, padFails = 0, padPhysicalA = 0;
+            unsigned padAMatches = 0, vehicleAMatches = 0, allAMatches = 0;
         };
         Record g_records[MAX_LOG_SAMPLES];
         unsigned g_count = 0;
@@ -261,6 +277,13 @@ namespace CTRPluginFramework
             r.pulseMoved = g_pulseMovedSeen;
             r.padPauseKnown = g_kdPadPauseKnown;
             r.padPaused = g_kdPadPaused;
+            r.padTrace = g_padTrace;
+            r.padPolls = g_padPolls;
+            r.padFails = g_padFails;
+            r.padPhysicalA = g_padPhysicalA;
+            r.padAMatches = g_padAMatches;
+            r.vehicleAMatches = g_vehicleAMatches;
+            r.allAMatches = g_allAMatches;
 
             r.value = g_observation;
             r.environment = g_environment;
@@ -448,9 +471,13 @@ namespace CTRPluginFramework
                 "mk7_controls_valid,mk7_controls_raw,"
                 "callback_work_us,probe_read_us,environment_read_us,"
                 "pulse_control_read_count,pulse_accel_bit_seen,pulse_speed_change,"
-                "manual_a_control_matches,pad_pause_known,pad_pause_candidate") == File::SUCCESS);
+                "manual_a_control_matches,pad_pause_known,pad_pause_candidate,"
+                "trace_valid,physical_a,kd_buttons_stick,kd_raw_buttons,kd_addin,"
+                "kd_type,kd_paused,vehicle_controls,vehicle_steer_x,"
+                "pad_polls,pad_fails,physical_a_polls,kd_a_matches,"
+                "vehicle_a_matches,full_chain_matches") == File::SUCCESS);
 
-            char line[1100];
+            char line[1500];
             for (unsigned i = 0; saved && i < g_count; ++i)
             {
                 const Record &r = g_records[i];
@@ -463,7 +490,9 @@ namespace CTRPluginFramework
                     "%.4f,%.4f,%.4f,%.4f,%.4f,"
                     "%u,%u,%d,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
                     "%lu,%lu,%lu,%u,%u,%s,%u,%u,%d,0x%08lX,"
-                    "%lu,%lu,%lu,%u,%d,%d,%u,%d,%d",
+                    "%lu,%lu,%lu,%u,%d,%d,%u,%d,%d,"
+                    "%d,%d,0x%08lX,0x%08lX,0x%08lX,%u,%u,0x%08lX,%.3f,"
+                    "%u,%u,%u,%u,%u,%u",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -511,7 +540,17 @@ namespace CTRPluginFramework
                     static_cast<unsigned long>(r.environmentReadUs),
                     r.pulseInputReads, r.pulseAccelSeen ? 1 : 0,
                     r.pulseMoved ? 1 : 0, r.manualAConfirmed,
-                    r.padPauseKnown ? 1 : 0, r.padPaused ? 1 : 0);
+                    r.padPauseKnown ? 1 : 0, r.padPaused ? 1 : 0,
+                    r.padTrace.valid ? 1 : 0, r.padTrace.physicalA ? 1 : 0,
+                    static_cast<unsigned long>(r.padTrace.kdButtonsAndStick),
+                    static_cast<unsigned long>(r.padTrace.kdRawButtons),
+                    static_cast<unsigned long>(r.padTrace.kdAddin),
+                    static_cast<unsigned>(r.padTrace.padType),
+                    static_cast<unsigned>(r.padTrace.padPaused),
+                    static_cast<unsigned long>(r.padTrace.vehicleControls),
+                    r.padTrace.steer,
+                    r.padPolls, r.padFails, r.padPhysicalA,
+                    r.padAMatches, r.vehicleAMatches, r.allAMatches);
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -558,6 +597,48 @@ namespace CTRPluginFramework
         {
             return PlausibleAddress(address) && Process::ReadFloat(address, value) &&
                    std::isfinite(value);
+        }
+
+
+        // mk7re/MK7-Memory: KDPad::m_data_on_frame +0x1C,
+        // raw buttons +0x2C, active add-in +0x18, type +0x3C.
+        // VehicleControl::m_controls +0xFC, m_stick_x +0x100.
+        void SampleKDPadReadOnly()
+        {
+            ++g_padPolls;
+            PadTrace t;
+            u32 pad = 0;
+            u8 type = 255, paused = 255;
+            if (!g_observation.candidate || !g_vehicleAddress ||
+                !ReadPointer(g_vehicleAddress + 0xE0, pad) ||
+                !ReadWord(pad + 0x1C, t.kdButtonsAndStick) ||
+                !ReadWord(pad + 0x2C, t.kdRawButtons) ||
+                !ReadWord(pad + 0x18, t.kdAddin) ||
+                !Process::Read8(pad + 0x3C, type) ||
+                !Process::Read8(pad + 0x3D, paused) ||
+                !ReadWord(g_vehicleAddress + 0xFC, t.vehicleControls) ||
+                !ReadNumber(g_vehicleAddress + 0x100, t.steer))
+            {
+                ++g_padFails;
+                g_padTrace = PadTrace();
+                return;
+            }
+            t.valid = true;
+            t.padType = type;
+            t.padPaused = paused;
+            t.physicalA = Controller::IsKeyDown(Key::A);
+            g_padTrace = t;
+            if (t.physicalA)
+            {
+                ++g_padPhysicalA;
+                if (t.kdButtonsAndStick & 1)
+                    ++g_padAMatches;
+                if (t.vehicleControls & 1)
+                    ++g_vehicleAMatches;
+                if ((t.kdButtonsAndStick & 1) &&
+                    (t.vehicleControls & 1))
+                    ++g_allAMatches;
+            }
         }
 
         void Probe()
@@ -1192,7 +1273,7 @@ namespace CTRPluginFramework
             if (!menuOpen && g_ready &&
                 (g_live || g_recording || g_control == WAIT_CLOSE ||
                  g_control == COUNTDOWN || g_control == PULSE ||
-                 g_control == OBSERVE))
+                 g_control == OBSERVE || g_traceInput))
             {
                 const u64 now = osGetTime();
                 bool dueTelemetry = g_lastTelemetryAt == 0 ||
@@ -1235,6 +1316,13 @@ namespace CTRPluginFramework
                 {
                     g_lastEnvironmentAt = now;
                     PollEnvironment();
+                }
+                if (g_traceInput && (g_lastInputTraceAt == 0 ||
+                    now < g_lastInputTraceAt ||
+                    now - g_lastInputTraceAt >= 100))
+                {
+                    g_lastInputTraceAt = now;
+                    SampleKDPadReadOnly();
                 }
                 ControlStep(osGetTime(), false);
                 if (g_recording && dueTelemetry)
@@ -1399,6 +1487,54 @@ namespace CTRPluginFramework
             MessageBox("P006 Experimental Snapshot", msg)();
         }
 
+
+        void ToggleInputTrace(MenuEntry *)
+        {
+            g_traceInput = !g_traceInput;
+            g_lastInputTraceAt = 0;
+            if (g_traceInput)
+            {
+                g_padTrace = PadTrace();
+                g_padPolls = g_padFails = g_padPhysicalA = 0;
+                g_padAMatches = g_vehicleAMatches = g_allAMatches = 0;
+            }
+            MessageBox("P006.1 KDPad trace", g_traceInput
+                ? "Read-only, opt-in ~10Hz. Drive with physical A,"
+                  " then turn left/right. Open input diagnostics after."
+                : "Input trace disabled.")();
+        }
+        void InputTraceDiagnostics(MenuEntry *)
+        {
+            char msg[520];
+            std::snprintf(msg, sizeof(msg),
+                "Trace: %s | sample: %s\n"
+                "Polls/fails: %u/%u\n"
+                "Physical A polls: %u\n"
+                "KDPad A matches: %u\n"
+                "Vehicle A matches: %u\n"
+                "All-three matches: %u\n"
+                "KDPad buttons: 0x%08lX\n"
+                "KDPad raw: 0x%08lX\n"
+                "KDPad addin: 0x%08lX\n"
+                "Pad type/pause: %u / %u\n"
+                "Vehicle controls: 0x%08lX\n"
+                "Vehicle steer X: %.3f\n"
+                "NO NEW INPUT INJECTION",
+                g_traceInput ? "ON" : "OFF",
+                g_padTrace.valid ? "VALID" : "NO DATA",
+                g_padPolls, g_padFails,
+                g_padPhysicalA, g_padAMatches,
+                g_vehicleAMatches, g_allAMatches,
+                static_cast<unsigned long>(g_padTrace.kdButtonsAndStick),
+                static_cast<unsigned long>(g_padTrace.kdRawButtons),
+                static_cast<unsigned long>(g_padTrace.kdAddin),
+                static_cast<unsigned>(g_padTrace.padType),
+                static_cast<unsigned>(g_padTrace.padPaused),
+                static_cast<unsigned long>(g_padTrace.vehicleControls),
+                g_padTrace.steer);
+            MessageBox("P006.1 input pipeline", msg)();
+        }
+
         void ShowEnvironment(MenuEntry *)
         {
             // Menu is paused: attempt a fresh, read-only snapshot first.
@@ -1476,6 +1612,10 @@ namespace CTRPluginFramework
             "Opt-in sampled observations, only while READY.");
         menu += new MenuEntry("Environment & rewards", nullptr, ShowEnvironment,
             "Inspect grounded/gliding modes, fused pad signals, brake evidence and rewards.");
+        menu += new MenuEntry("Toggle READ-ONLY input trace", nullptr, ToggleInputTrace,
+            "Sample MK7 player KDPad and vehicle controls without writing memory.");
+        menu += new MenuEntry("Input pipeline diagnostics", nullptr, InputTraceDiagnostics,
+            "Check physical A, KDPad A and vehicle acceleration matches.");
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
