@@ -3,21 +3,23 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 5
+    Revision: 6
 
 Targets:
 
-Title: Collie Kart Portable P005
+Title: Collie Kart Portable P006
 
-Summary: Passive MK7 sensor fusion, rewards and performance diagnostics
+Summary: MK7 optional profiler and gated HID input experiment
 
 Description: |
-    Extends the MK7 flight recorder with fused normal dash-panel
-    detection, time-based lower-overhead telemetry polling, passive
-    B/brake correlation, and raw sensor/performance CSV diagnostics.
-    Provisional progress/time/lap reward weights are unchanged.
-    No controller injection, game-memory edits, autonomous driving,
-    training, or in-race file writes.
+    P006 preserves passive MK7 telemetry and user-triggered CSV logging.
+    Opt-in performance diagnostics track frame callback cadence and
+    read durations; a dry-run-gated single-use HID InjectKey(A)
+    experiment is included but unverified on real hardware.
+    Manual B/START abort, telemetry watchdog and short expiry
+    prevent repeated injection attempts. No autonomous navigation,
+    reinforcement learning, or game RAM modifications.
+    Input release relies on platform HID refresh and is NOT proven.
 
 Compatibility: Any
 
