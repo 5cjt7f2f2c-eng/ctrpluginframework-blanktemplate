@@ -681,19 +681,30 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P004 | READY" : "CK P004 | INACTIVE",
+            screen.Draw(g_ready ? "CK P005 | READY" : "CK P005 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
-            // Sharing the same probe avoids duplicate reads when showing
-            // telemetry and recording simultaneously.
+            // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
+            // Only ~2Hz full pointer walks; <=10Hz lightweight flag reads.
             if (g_ready && (g_live || g_recording))
             {
-                if (++g_frames % 30 == 0)
+                const u64 now = osGetTime();
+                bool dueTelemetry = g_lastTelemetryAt == 0 ||
+                    now < g_lastTelemetryAt ||
+                    now - g_lastTelemetryAt >= TELEMETRY_INTERVAL_MS;
+                if (dueTelemetry)
+                {
+                    g_lastTelemetryAt = now;
                     Probe();
-                // Lightweight candidate flag polling once per display frame.
-                // Avoid capturing new CSV rows until mode was polled.
-                PollEnvironment();
-                if (g_recording && g_frames % 30 == 0)
+                }
+                if (g_lastEnvironmentAt == 0 ||
+                    now < g_lastEnvironmentAt ||
+                    now - g_lastEnvironmentAt >= ENVIRONMENT_INTERVAL_MS)
+                {
+                    g_lastEnvironmentAt = now;
+                    PollEnvironment();
+                }
+                if (g_recording && dueTelemetry)
                     CaptureSample();
             }
             if (g_live && g_ready)
@@ -754,12 +765,15 @@ namespace CTRPluginFramework
         void ToggleLive(MenuEntry *)
         {
             g_live = !g_live;
-            g_frames = 0;
-            g_observation = Observation();
-            g_vehicleAddress = 0;
-            g_environment = Environment();
-            g_havePreviousFlags = false;
-            g_previousModeAt = 0;
+            if (!g_recording)
+            {
+                g_lastTelemetryAt = g_lastEnvironmentAt = 0;
+                g_observation = Observation();
+                g_vehicleAddress = 0;
+                g_environment = Environment();
+                g_havePreviousFlags = false;
+                g_previousModeAt = 0;
+            }
         }
         void ShowDiagnostics(MenuEntry *)
         {
@@ -776,11 +790,15 @@ namespace CTRPluginFramework
                 "\nMode: " + ModeName(g_environment.mode) +
                 "\nPads glide/boost: " + std::to_string(g_gliderPadActivations) +
                     "/" + std::to_string(g_boostPadActivations) +
+                "\nDash/flag edges: " + std::to_string(g_dashPanelEdges) +
+                    "/" + std::to_string(g_boostFlagEdges) +
+                "\nEnv polls/errors: " + std::to_string(g_envPolls) +
+                    "/" + std::to_string(g_envReadFails) +
                 "\nReward total (test): " + std::to_string(g_totalReward) +
                 "\nLast CSV: " + g_lastFile +
                 "\nRace detection: NOT VERIFIED\n"
                 "Controls: DISABLED\nLearning: DISABLED";
-            MessageBox("Collie Kart P004 Diagnostics", msg)();
+            MessageBox("Collie Kart P005 Diagnostics", msg)();
         }
         void Snapshot(MenuEntry *)
         {
@@ -809,25 +827,29 @@ namespace CTRPluginFramework
                     msg += "Speed: UNAVAILABLE\n";
             }
             msg += "\nCompare values against real gameplay.";
-            MessageBox("P004 Experimental Snapshot", msg)();
+            MessageBox("P005 Experimental Snapshot", msg)();
         }
 
         void ShowEnvironment(MenuEntry *)
         {
             // Menu is paused: attempt a fresh, read-only snapshot first.
             Probe();
-            PollEnvironment();
+            PollEnvironment(true); // No event counters from paused menu.
             const Environment &e = g_environment;
-            char lines[560];
+            char lines[920];
             std::snprintf(lines, sizeof(lines),
                 "Mode: %s (%s)\n"
                 "Flags: status 0x%08lX boost 0x%08lX\n"
                 "Air frames: %lu  Ground frames: %lu\n"
                 "KCL surface: %lu  Dash type: %lu\n"
                 "Glide pads: %u  Boost pads: %u\n"
+                "Dash/flag edges: %u/%u\n"
                 "Glider deploys: %u\n"
                 "Force-close flag: %u\n"
                 "Midair closes: %u  Land closes: %u\n"
+                "B brake held: %s  Linked closes: %u\n"
+                "Env polls/fails: %u/%u\n"
+                "Poll gap: %lums read: %lums (max %lu)\n"
                 "Ground: %lus  Water: %lus\n"
                 "Air: %lus  Glide: %lus\n"
                 "Last reward: %.3f  Total: %.3f\n"
@@ -840,14 +862,20 @@ namespace CTRPluginFramework
                 static_cast<unsigned long>(e.surfaceCode),
                 static_cast<unsigned long>(e.dashType),
                 g_gliderPadActivations, g_boostPadActivations,
+                g_dashPanelEdges, g_boostFlagEdges,
                 g_gliderDeployments, g_forceCloseSignals,
                 g_airClosures, g_landingClosures,
+                e.brakeHeld ? "YES" : "NO", g_brakeLinkedClosures,
+                g_envPolls, g_envReadFails,
+                static_cast<unsigned long>(g_envPollGapMs),
+                static_cast<unsigned long>(g_envLastReadMs),
+                static_cast<unsigned long>(g_envMaxReadMs),
                 static_cast<unsigned long>(g_modeMs[GROUND] / 1000),
                 static_cast<unsigned long>(g_modeMs[UNDERWATER] / 1000),
                 static_cast<unsigned long>(g_modeMs[AIRBORNE] / 1000),
                 static_cast<unsigned long>(g_modeMs[GLIDING] / 1000),
                 g_latestReward, g_totalReward);
-            MessageBox("P004 Environment & Rewards", lines)();
+            MessageBox("P005 Environment & Rewards", lines)();
         }
     }
 
@@ -864,8 +892,8 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P004", 0, 0, 4,
-            "Passive environment and reward evaluation.\n"
+        PluginMenu menu("Collie Kart P005", 0, 0, 5,
+            "Low-overhead pad fusion and passive rewards.\n"
             "No game-memory writes or autonomous controls.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
@@ -878,7 +906,7 @@ namespace CTRPluginFramework
         menu += new MenuEntry("Toggle live telemetry", nullptr, ToggleLive,
             "Opt-in sampled observations, only while READY.");
         menu += new MenuEntry("Environment & rewards", nullptr, ShowEnvironment,
-            "Read candidate driving mode, pad activations and reward counters.");
+            "Inspect grounded/gliding modes, fused pad signals, brake evidence and rewards.");
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
