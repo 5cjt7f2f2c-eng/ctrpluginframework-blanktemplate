@@ -3,20 +3,21 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 3
+    Revision: 4
 
 Targets:
 
-Title: Collie Kart Portable P003
+Title: Collie Kart Portable P004
 
-Summary: MK7 read-only passive CSV flight recorder
+Summary: Passive MK7 environmental states and reward evaluation
 
 Description: |
-    Keeps the P001/P002 overlays and telemetry, adds user-controlled
-    buffering of live telemetry with Stop & Save CSV to the SD card.
-    No game-memory writing, input injection, or learning.
-    MK7 memory addresses are derived from Citra and were observed
-    to react plausibly on one USA New 3DS.
+    Extends P003 buffered CSV telemetry with experimental ground,
+    underwater, airborne, gliding classification and separate
+    glider-pad and ordinary boost-pad activations. Calculates
+    provisional progress/time/lap rewards only; no driver,
+    machine learning, game-memory writes or automatic saving.
+    These new mode signals require real 3DS verification.
 
 Compatibility: Any
 
