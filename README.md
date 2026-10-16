@@ -33,8 +33,8 @@ All ordinary P005 features should still function. If anything freezes or acts su
 ## Test B — SAFETY dry run (NO injected inputs)
 
 1. Stay on **Toad Circuit Time Trial**, on level ground, stopped, with READY ON and candidate telemetry valid.
-2. Choose **Queue DRY RUN (no input)**, close the plugin menu, and release A/B/START. **P006 now waits for the menu to close, gives the menu's A press 400ms to clear, then requires 150ms of neutral controls before starting the 1.5-second countdown.** The plugin should finish without moving the kart. This unlocks the first dry-run criterion.
-3. Queue **ANOTHER** dry run, close the menu, release the menu buttons and wait until the state reaches **COUNTDOWN**, then press **physical B** before the countdown finishes. Check **Profiler & control diagnostics**. It should report `ABORTED` with `B/START physical override`, and `Physical abort verified: YES`.
+2. Choose **Queue DRY RUN (no input)**, close the plugin menu, and release A/B/START. **P006 now waits for the menu to close, gives the menu's A press 400ms to clear, then requires 150ms of neutral controls before starting the five-second countdown.** The plugin should finish without moving the kart. It displays `RACCOON IN 5s`, etc., as the countdown proceeds. A/START are allowed early to dismiss MK7's own pause menu; release them well before the countdown reaches zero. The final 800ms is a neutral-input guard, and at least 300ms of neutral input is required at the deadline. This unlocks the first dry-run criterion.
+3. Queue **ANOTHER** dry run, close the menu, resume MK7 if its own pause screen appears, and press **physical B** during the five-second countdown to test the abort. The countdown now permits A/START early for unpausing; keep B reserved for emergency abort. Check **Profiler & control diagnostics**. It should report `ABORTED` with `B/START physical override`, and `Physical abort verified: YES`.
 4. The real experiment stays locked until **both** a successful dry run AND a physical-abort dry run are observed within this game session. The lock resets when the game/plugin restarts.
 
 **Warning:** Mario Kart uses B for brake/reverse; press it only when stationary in the dry-run test. If the menu key state does not clear within 3.5 seconds, P006 now aborts safely with `A/B/START remained held after menu` rather than attempting artificial input. CTRPF menu opening also cancels a queued or active test.
@@ -45,18 +45,18 @@ All ordinary P005 features should still function. If anything freezes or acts su
 
 1. Use Time Trial, stationary and grounded; keep the physical A button released.
 2. Choose `Queue REAL A pulse (EXPERIMENT)` from CTRPF, close the menu, and release the buttons to satisfy the new release interlock.
-3. After the countdown, the plugin requests a **single short HID A-key burst** (at most 80 ms), then ceases all injections. You can press physical B or START during countdown/pulse to abort if callbacks continue.
+3. After the five-second countdown, the plugin requests a **single short HID A-key burst** (at most 80 ms), then ceases all injections. It also passively observes MK7's candidate acceleration-control bit for about 1.3 seconds after the burst. You can press physical B or START during countdown/pulse to abort if callbacks continue.
 4. Check whether the kart begins accelerating and, most importantly, **whether it stops accelerating after the pulse**. Record the outcome even if no movement happens.
 5. Use `Profiler & control diagnostics` to inspect `HID injection calls`, `Control phase`, and `MK7 control bits`. If it does not release naturally, stop the game and disable Plugin Loader; do not repeat.
 6. Even if it works, **P006 is not approved for longer driving or steering**. Hardware release, timing, performance, and independent recovery remain open issues.
 
-The real experiment can be queued again only by explicitly selecting it anew. There is no self-arming or automatic repetition, and no learning algorithm.
+The real experiment can be queued again only by explicitly selecting it anew. **If the pulse appears to do nothing, don't increase duration yet:** inspect the new `pulse_control_read_count`, `pulse_accel_bit_seen`, `pulse_speed_change`, and `pad_pause_candidate` diagnostics to distinguish a paused game or missed HID acceptance from a silent injector. There is no self-arming or automatic repetition, and no learning algorithm.
 
 ## New logging fields
 
 These columns are appended after the P005 CSV fields:
 
-`callback_gap_ms,callback_work_ms,probe_read_ms,profiler_callbacks,callback_gaps_over_50ms,control_phase,hid_injection_calls,control_aborts,mk7_controls_valid,mk7_controls_raw,callback_work_us,probe_read_us,environment_read_us`
+`callback_gap_ms,callback_work_ms,probe_read_ms,profiler_callbacks,callback_gaps_over_50ms,control_phase,hid_injection_calls,control_aborts,mk7_controls_valid,mk7_controls_raw,callback_work_us,probe_read_us,environment_read_us,pulse_control_read_count,pulse_accel_bit_seen,pulse_speed_change,manual_a_control_matches,pad_pause_known,pad_pause_candidate`
 
 - `callback_gap_ms` — gap between plugin bottom-screen OSD callbacks in milliseconds when profiler is enabled and menu closed. **Not guaranteed game FPS.**
 - `callback_work_ms` — duration of our OSD callback including HUD drawing, rounded to 1ms resolution.
@@ -66,7 +66,10 @@ These columns are appended after the P005 CSV fields:
 - `control_phase` — DISARMED, WAIT_CLOSE, COUNTDOWN, PULSE, FINISHED, ABORTED.
 - `hid_injection_calls` — number of explicit `Controller::InjectKey(A)` calls, **not proof of MK7 accepting the input**.
 - `control_aborts` — number of software aborts.
-- `mk7_controls_valid`, `mk7_controls_raw` — read-only candidate `VehicleControl::m_controls` at vehicle + `0xFC`, for cross-checking injection. Based on [mk7re/MK7-Memory](https://github.com/mk7re/MK7-Memory/blob/master/template/Kart/Vehicle/VehicleControl.hpp); hardware behavior unknown.
+- `mk7_controls_valid`, `mk7_controls_raw` — read-only candidate `VehicleControl::m_controls` at vehicle + `0xFC`, for cross-checking injection.
+- `pulse_control_read_count` — read-only control-bit samples taken during/after the A burst; `pulse_accel_bit_seen` records whether bit0 ever became active; `pulse_speed_change` reports if speed exceeded the test's threshold. None independently guarantees the injector caused movement.
+- `manual_a_control_matches` — how often physical A and MK7 control bit0 were observed together during normal driving; a calibration aid.
+- `pad_pause_known`, `pad_pause_candidate` — MK7 `KDPad.m_is_paused` research candidate. This is logged as diagnostic evidence only; it is NOT a verified game-pause detector or safety interlock. Based on [mk7re/MK7-Memory](https://github.com/mk7re/MK7-Memory/blob/master/template/Kart/Vehicle/VehicleControl.hpp); hardware behavior unknown.
 
 The existing P005 reward weights and all original CSV columns are unchanged.
 
@@ -74,7 +77,7 @@ The existing P005 reward weights and all original CSV columns are unchanged.
 
 - Real injection only after a dry run + physical B/START abort has passed.
 - User must be READY and on MK7 USA, with valid stationary grounded telemetry.
-- 400ms post-menu grace and 150ms stable-neutral interlock, then 1.5s countdown; 80ms **maximum request duration**; callbacks with a gap over 250ms abort. Holding physical A during countdown also aborts.
+- 400ms post-menu grace and 150ms stable-neutral interlock, then five-second countdown; 80ms **maximum request duration**; callbacks with a gap over 250ms abort. Holding physical A during countdown also aborts.
 - B or START triggers abort if detected; reopening CTRPF menu also aborts; READY OFF aborts.
 - The plugin stops requesting injections after the pulse. **It cannot currently guarantee clearing the shared HID buffers or overriding a frozen callback.**
 - The first pulse intentionally has very short duration, and therefore **may not be noticed by the game**; that is a diagnostic result, not a failure to be hidden.
