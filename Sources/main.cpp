@@ -526,16 +526,28 @@ namespace CTRPluginFramework
         }
 
 
-        // Poll frequently, in RAM only. Rising edges avoid counting one pad
-        // for every game frame that its flag remains active.
-        void PollEnvironment()
+        // At most ~10Hz based on elapsed milliseconds, not frame count.
+        // Read-only: no file operations and no changes to the MK7 process.
+        // Snapshot from the plugin menu does not count events or time.
+        void PollEnvironment(bool menuSnapshot = false)
         {
+            const u64 started = osGetTime();
             Environment next;
+            if (!menuSnapshot)
+            {
+                ++g_envPolls;
+                if (g_previousModeAt && started >= g_previousModeAt)
+                    g_envPollGapMs = static_cast<u32>(started - g_previousModeAt);
+                else
+                    g_envPollGapMs = 0;
+            }
+
             if (g_vehicleAddress == 0 || !g_observation.candidate)
             {
                 g_environment = next;
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
+                if (!menuSnapshot) ++g_envReadFails;
                 return;
             }
 
@@ -548,20 +560,25 @@ namespace CTRPluginFramework
                 g_environment = next;
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
+                if (!menuSnapshot) ++g_envReadFails;
                 return;
             }
 
-            // Optional research fields. Unknown = 0xFFFFFFFF.
+            // Keep both pad-detection signals, plus raw source fields.
             u32 raw = 0;
-            if (ReadWord(v + 0xD14, raw) && raw <= 31)
-                next.surfaceCode = raw;
             if (ReadWord(v + 0xF98, raw) && raw <= 8)
                 next.dashType = raw;
+            if (ReadWord(v + 0xD14, raw) && raw <= 31)
+                next.surfaceCode = raw;
 
+            // P005: candidate B input telemetry, never injected or modified.
+            // This input read may need calibration against physical controls.
+            next.brakeHeld = Controller::IsKeyDown(Key::B);
             next.valid = true;
-            if ((next.statusFlags & 0x80) != 0)
+
+            if (next.statusFlags & 0x80)
                 next.mode = GLIDING;
-            else if ((next.statusFlags & 0x1000) != 0)
+            else if (next.statusFlags & 0x1000)
                 next.mode = UNDERWATER;
             else if (next.airFrames > 1 && next.groundFrames == 0)
                 next.mode = AIRBORNE;
@@ -570,47 +587,91 @@ namespace CTRPluginFramework
             else
                 next.mode = UNKNOWN;
 
-            u64 now = osGetTime();
-            // Exclude menu pauses from accumulated state durations; prevent
-            // stale flag-edge events after unexpectedly long polling gaps.
-            bool continuous = g_previousModeAt != 0 &&
-                now >= g_previousModeAt && now - g_previousModeAt <= 200;
-            if (g_recording && continuous && g_previousMode > UNKNOWN &&
-                g_previousMode <= GLIDING)
-                g_modeMs[g_previousMode] += static_cast<u32>(now - g_previousModeAt);
+            // Reading the menu must not create fake triggers or durations.
+            if (menuSnapshot)
+            {
+                g_environment = next;
+                g_havePreviousFlags = false;
+                g_previousModeAt = 0;
+                return;
+            }
+
+            const bool continuous = g_previousModeAt != 0 &&
+                started >= g_previousModeAt &&
+                started - g_previousModeAt <= MAX_EVENT_GAP_MS;
+            if (g_recording && continuous &&
+                g_previousMode > UNKNOWN && g_previousMode <= GLIDING)
+                g_modeMs[g_previousMode] +=
+                    static_cast<u32>(started - g_previousModeAt);
+
+            if (g_recording && next.brakeHeld)
+            {
+                g_recentBrakeAt = started;
+                if (next.mode == GLIDING)
+                    ++g_brakeWhileGliding;
+            }
 
             if (g_recording && g_havePreviousFlags && continuous)
             {
                 const u32 risingStatus = next.statusFlags & ~g_previousStatus;
                 const u32 risingBoost = next.boostFlags & ~g_previousBoost;
+                const bool padBoostFlagEdge = (risingBoost & 0x2) != 0;
+                const bool dashPanelEdge = (next.dashType == 6 &&
+                                            g_previousDashType != 6);
 
                 if (risingStatus & 0x100)
                     ++g_gliderPadActivations;
-                if (risingBoost & 0x2)
-                    ++g_boostPadActivations;
                 if (risingStatus & 0x80)
                     ++g_gliderDeployments;
                 if (risingStatus & 0x400)
                     ++g_forceCloseSignals;
 
-                // End-of-glide classification is a hypothesis:
-                // landing and midair closures are NOT yet penalties.
+                // Two different sources, one deduplicated pad-hit counter.
+                // dashType==6 is DASH_PANEL per mk7re/MK7-Memory.
+                if (padBoostFlagEdge)
+                    ++g_boostFlagEdges;
+                if (dashPanelEdge)
+                    ++g_dashPanelEdges;
+                if (padBoostFlagEdge || dashPanelEdge)
+                {
+                    if (g_previousBoostEventAt == 0 ||
+                        started - g_previousBoostEventAt >= BOOST_EVENT_COOLDOWN_MS)
+                    {
+                        ++g_boostPadActivations;
+                        g_previousBoostEventAt = started;
+                    }
+                }
+
+                // Do not assign any manual glider penalty yet.
                 if ((g_previousStatus & 0x80) &&
                     !(next.statusFlags & 0x80))
                 {
                     if (next.groundFrames > 0)
                         ++g_landingClosures;
                     else
+                    {
                         ++g_airClosures;
+                        if (g_recentBrakeAt &&
+                            started >= g_recentBrakeAt &&
+                            started - g_recentBrakeAt <= MAX_EVENT_GAP_MS)
+                            ++g_brakeLinkedClosures;
+                    }
                 }
             }
 
             g_environment = next;
             g_previousStatus = next.statusFlags;
             g_previousBoost = next.boostFlags;
+            g_previousDashType = next.dashType;
             g_previousMode = next.mode;
-            g_previousModeAt = now;
+            g_previousModeAt = started;
             g_havePreviousFlags = true;
+
+            const u64 completed = osGetTime();
+            g_envLastReadMs = completed >= started
+                ? static_cast<u32>(completed - started) : 0;
+            if (g_envLastReadMs > g_envMaxReadMs)
+                g_envMaxReadMs = g_envLastReadMs;
         }
 
         bool DrawStatus(const Screen &screen)
