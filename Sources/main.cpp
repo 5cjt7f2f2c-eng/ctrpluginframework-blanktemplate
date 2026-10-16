@@ -87,6 +87,12 @@ namespace CTRPluginFramework
         constexpr u64 FIRST_CONTACT_COUNTDOWN_MS = 1500;
         constexpr u64 FIRST_CONTACT_MAX_PULSE_MS = 80;
         constexpr u64 FIRST_CONTACT_MAX_GAP_MS = 250;
+        // Selecting a CTRPF menu item uses A. Discard UI-held button state
+        // until the menu has closed and keys are released for a short interval.
+        constexpr u64 FIRST_CONTACT_EXIT_GRACE_MS = 400;
+        constexpr u64 FIRST_CONTACT_NEUTRAL_STABLE_MS = 150;
+        constexpr u64 FIRST_CONTACT_RELEASE_TIMEOUT_MS = 3500;
+        u64 g_controlWaitStartedAt = 0, g_controlNeutralSince = 0;
         u32 g_vehicleControlsObserved = 0;
         bool g_vehicleControlsValid = false;
 
@@ -779,6 +785,7 @@ namespace CTRPluginFramework
                 // Do not inject any further artificial input.
                 g_controlNextAt = 0;
                 g_controlPulseStart = 0;
+                g_controlWaitStartedAt = g_controlNeutralSince = 0;
             }
         }
 
@@ -820,22 +827,60 @@ namespace CTRPluginFramework
                 AbortControl("No valid grounded telemetry");
                 return;
             }
-            if (UserAbortPressed())
-            {
-                AbortControl("B/START physical override");
-                return;
-            }
+
+            // WAIT_CLOSE is a RELEASE INTERLOCK, not part of the countdown.
+            // At queue time, A is commonly held by the CTRPF menu itself.
+            // Never test A/B/START synchronously in the menu callback.
             if (g_control == WAIT_CLOSE)
             {
+                if (!g_controlWaitStartedAt)
+                {
+                    g_controlWaitStartedAt = now;
+                    g_controlNeutralSince = 0;
+                    return;
+                }
+                if (now < g_controlWaitStartedAt)
+                {
+                    AbortControl("Input timer reset");
+                    return;
+                }
+                const u64 elapsed = now - g_controlWaitStartedAt;
+                if (elapsed < FIRST_CONTACT_EXIT_GRACE_MS)
+                    return;
+
+                const u32 blockedKeys = static_cast<u32>(Key::A) |
+                    static_cast<u32>(Key::B) | static_cast<u32>(Key::Start);
+                if ((Controller::GetKeysDown(false) & blockedKeys) != 0)
+                {
+                    g_controlNeutralSince = 0;
+                    if (elapsed >= FIRST_CONTACT_RELEASE_TIMEOUT_MS)
+                        AbortControl("A/B/START remained held after menu");
+                    return;
+                }
+                if (g_controlNeutralSince == 0)
+                {
+                    g_controlNeutralSince = now;
+                    return;
+                }
+                if (now - g_controlNeutralSince <
+                    FIRST_CONTACT_NEUTRAL_STABLE_MS)
+                    return;
                 if (g_observation.speed > 0.35f ||
                     g_observation.speed < -0.35f)
                 {
                     AbortControl("Kart already moving");
                     return;
                 }
+
                 g_control = COUNTDOWN;
                 g_controlNextAt = now + FIRST_CONTACT_COUNTDOWN_MS;
                 g_controlLastCallbackAt = now;
+                return;
+            }
+            // A physical B or START press after the release interlock aborts.
+            if (UserAbortPressed())
+            {
+                AbortControl("B/START physical override");
                 return;
             }
             if (g_controlLastCallbackAt != 0 &&
@@ -920,26 +965,25 @@ namespace CTRPluginFramework
                     "Please be stationary on the ground in a Time Trial with valid telemetry.")();
                 return;
             }
-            if (Controller::IsKeyDown(Key::A) || UserAbortPressed())
-            {
-                MessageBox("P006 test cannot arm",
-                    "Release the physical A, B and START buttons first.")();
-                return;
-            }
+            // Menu selection commonly uses A; check for key release later,
+            // once the menu has fully closed and no longer owns the input.
             g_controlIsDryRun = dryRun;
             g_control = WAIT_CLOSE;
             g_controlNextAt = g_controlPulseStart = 0;
             g_controlLastCallbackAt = 0;
+            g_controlWaitStartedAt = g_controlNeutralSince = 0;
             MessageBox(dryRun ? "P006 DRY RUN queued" :
                 "P006 REAL HID TEST queued",
                 dryRun
-                ? "Close the menu while stationary. After about 1.5 seconds,"
-                  " P006 will finish WITHOUT any injected key. Try aborting"
-                  " an additional dry run with physical B/START."
+                ? "Release A/B/START after closing the menu."
+                  " A neutral-input interlock runs before the 1.5s countdown."
+                  " No keys are injected. Then try a second dry run and press"
+                  " physical B during COUNTDOWN to test the abort."
                 : "CAUTION: this writes A into HID shared buffers briefly."
                   " Game acceptance and key release are UNVERIFIED."
-                  " Close menu while stationary. Press physical B/START"
-                  " to abort. If controls stick, end MK7 and disable plugin.")();
+                  " Close menu, release buttons and wait for countdown."
+                  " Physical B/START can abort after COUNTDOWN starts."
+                  " If controls stick, end MK7 and disable plugin.")();
         }
 
         void QueueDryRun(MenuEntry *) { QueueControlExperiment(true); }
@@ -984,6 +1028,7 @@ namespace CTRPluginFramework
                 "Control phase: %s\n"
                 "Dry-run passed: %s\n"
                 "Physical abort verified: %s\n"
+                "Release interlock: %s\n"
                 "HID injection calls: %u\n"
                 "Abort count: %u\n"
                 "Last abort: %s\n"
@@ -1005,6 +1050,7 @@ namespace CTRPluginFramework
                 g_envPolls, g_envReadFails, ControlName(g_control),
                 g_dryRunComplete ? "YES" : "NO",
                 g_physicalAbortVerified ? "YES" : "NO",
+                g_control == WAIT_CLOSE ? "WAITING" : "NOT WAITING",
                 g_hidInjectionCalls, g_controlAborts,
                 g_lastAbortReason, g_vehicleControlsValid ? "READ" : "N/A",
                 static_cast<unsigned long>(g_vehicleControlsObserved));
