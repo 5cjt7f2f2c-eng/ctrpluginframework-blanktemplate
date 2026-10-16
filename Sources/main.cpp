@@ -694,6 +694,8 @@ namespace CTRPluginFramework
 
 
 
+        void Probe(); // defined below
+
         // MITM: original first, optionally modify only the local PLAYER pad's
         // current game-frame input. Never intercept UI pad or steering here.
         // If disabled, original input is returned on every frame unmodified.
@@ -1286,6 +1288,8 @@ namespace CTRPluginFramework
                 g_controlPulseStart = 0;
                 g_controlWaitStartedAt = g_controlNeutralSince = 0;
                 g_controlObserveEndAt = 0;
+                g_nativePulseState = 0;
+                g_nativeDeadline = 0;
             }
         }
 
@@ -1466,28 +1470,52 @@ namespace CTRPluginFramework
                     }
                     else
                     {
+                        const u32 lastFrame = g_nativeLastFrameMs;
+                        if (!g_nativeHookEnabled || !g_nativePlayerPad ||
+                            g_nativeSeenFrames < 30 ||
+                            g_nativeManualAFrames < 10 ||
+                            lastFrame == 0 ||
+                            (static_cast<u32>(now) - lastFrame) > 180)
+                        {
+                            AbortControl("Native hook not calibrated/active");
+                            return;
+                        }
+                        g_nativeInjectedFrames = 0;
+                        g_nativeReleaseFrames = 0;
+                        g_nativeAbortSignal = 0;
+                        g_nativeDeadline = static_cast<u32>(now) +
+                            NATIVE_FRAME_TIMEOUT_MS;
+                        g_nativePulseState = 1;
                         g_control = PULSE;
                         g_controlPulseStart = now;
                         g_controlObserveEndAt = 0;
+                        ++g_nativePulseTrials;
                     }
                 }
             }
             if (g_control == PULSE)
             {
                 SampleGameControls(true);
-                // Single-use short A-key burst; do not increase until game
-                // has demonstrated it receives AND releases this input.
-                if (now < g_controlPulseStart ||
-                    now - g_controlPulseStart >= FIRST_CONTACT_MAX_PULSE_MS)
+                if (g_nativePulseState == 3)
+                {
+                    AbortControl(g_nativeAbortSignal == 2
+                        ? "Physical B detected by native hook"
+                        : "Native timeout or physical A during pulse");
+                    return;
+                }
+                if (g_nativePulseState == 2)
                 {
                     g_control = OBSERVE;
                     g_controlObserveEndAt = now + FIRST_CONTACT_OBSERVE_MS;
                     return;
                 }
-                // P006.1 is strictly READ ONLY. Real HID injection is
-                // deliberately disabled, even if control phase were reached.
-                AbortControl("P006.1 injection disabled");
-                return;
+                if (now < g_controlPulseStart ||
+                    now - g_controlPulseStart > NATIVE_FRAME_TIMEOUT_MS ||
+                    g_nativePulseState != 1)
+                {
+                    AbortControl("Native pulse did not finish on time");
+                    return;
+                }
             }
             if (g_control == OBSERVE)
             {
@@ -1506,11 +1534,14 @@ namespace CTRPluginFramework
                     "Finish or abort the current experiment first.")();
                 return;
             }
-            if (!dryRun && (!g_dryRunComplete || !g_physicalAbortVerified))
+            if (!dryRun && (!g_dryRunComplete || !g_physicalAbortVerified ||
+                            !g_nativeHookEnabled || g_nativeSeenFrames < 30 ||
+                            g_nativeManualAFrames < 10))
             {
-                MessageBox("P006 real pulse LOCKED",
-                    "First complete one DRY RUN and separately ABORT another"
-                    " dry run using physical B/START. Both checks required.")();
+                MessageBox("P006.3 native A pulse LOCKED",
+                    "Require installed pass-through hook, 30 game frames,"
+                    " 10 physical-A frames, one complete 5s dry-run, and"
+                    " another dry-run physically aborted by B.")();
                 return;
             }
             if (!g_ready || Process::GetTitleID() != MK7_USA)
@@ -1539,28 +1570,30 @@ namespace CTRPluginFramework
             g_controlObserveEndAt = 0;
             g_pulseControlReads = 0;
             g_pulseMk7AccelerateSeen = g_pulseMovedSeen = false;
-            MessageBox(dryRun ? "P006 DRY RUN queued" :
-                "P006 REAL HID TEST queued",
+            g_nativePulseState = 0;
+            g_nativeDeadline = 0;
+            MessageBox(dryRun ? "P006.3 DRY RUN queued" :
+                "P006.3 NATIVE 3-FRAME A TEST queued",
                 dryRun
                 ? "Release A/B/START after closing the menu."
                   " A neutral-input interlock runs before the FIVE-SECOND countdown."
                   " Resume MK7 using A/START in the first few seconds."
                   " Release controls near zero; B aborts anytime."
-                : "CAUTION: this writes A into HID shared buffers briefly."
-                  " Game acceptance and key release are UNVERIFIED."
-                  " Close menu, resume MK7 within FIVE seconds,"
-                  " then release A/START. Physical B aborts at any time."
-                  " If controls stick, end MK7 and disable plugin.")();
+                : "Experimental A input for exactly 3 game frames."
+                  " No HID injection. Close menu and resume MK7 during the"
+                  " 5s countdown, then release A/START. B aborts."
+                  " If controls stick, quit MK7 and disable Plugin Loader.")();
         }
 
         void QueueDryRun(MenuEntry *) { QueueControlExperiment(true); }
-        void QueueRealPulse(MenuEntry *) { QueueControlExperiment(false); }
+        void QueueNativePulse(MenuEntry *) { QueueControlExperiment(false); }
 
         void CancelControl(MenuEntry *)
         {
             AbortControl("Manual menu cancellation");
             MessageBox("P006 control experiment",
-                "Control experiment cancelled, no additional keys will be injected.")();
+                "Native experiment cancelled: normal physical input resumes."
+                " If behavior is abnormal, quit MK7 and disable Plugin Loader.")();
         }
 
         void ToggleProfiler(MenuEntry *)
@@ -1661,7 +1694,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P006.2 | READY" : "CK P006.2 | INACTIVE",
+            screen.Draw(g_ready ? "CK P006.3 | READY" : "CK P006.3 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -1701,6 +1734,8 @@ namespace CTRPluginFramework
                     {
                         g_kdPadPauseKnown = true;
                         g_kdPadPaused = gamePadPaused != 0;
+                        if (g_nativeHookEnabled && g_nativePulseState == 0)
+                            g_nativePlayerPad = gamePad;
                     }
                     // Compare physical A with MK7's own accelerate bit.
                     if (g_control == DISARMED || g_control == FINISHED ||
@@ -1817,6 +1852,7 @@ namespace CTRPluginFramework
             if (!g_ready)
             {
                 AbortControl("READY turned off");
+                g_nativePulseState = 0;
                 g_recording = false; // Preserve unsaved data.
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
@@ -2051,9 +2087,17 @@ namespace CTRPluginFramework
         }
     }
 
-    // No patches and no writes to MK7 process memory.
+    // The hook is installed only on explicit menu selection after signature
+    // verification; it is never installed automatically on startup.
     void PatchProcess(FwkSettings &) {}
-    void OnProcessExit(void) {}
+    void OnProcessExit(void)
+    {
+        g_nativePulseState = 0;
+        g_nativePlayerPad = 0;
+        g_nativeHookEnabled = false;
+        if (g_nativeHook.IsEnabled())
+            g_nativeHook.Disable();
+    }
 
     int main(void)
     {
@@ -2064,9 +2108,9 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P006.2", 0, 0, 8,
-            "Native controller setter PRE-FLIGHT. Read only.\n"
-            "No controller injection or game RAM writes.");
+        PluginMenu menu("Collie Kart P006.3", 0, 0, 9,
+            "Experimental MK7 game-frame input hook, OFF at boot.\n"
+            "Pulse locked until native calibration and two dry runs.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
@@ -2087,10 +2131,16 @@ namespace CTRPluginFramework
             "Read-only inspect the MK7 pad subsystem chain at up to 5Hz.");
         menu += new MenuEntry("Native setter diagnostics", nullptr, ShowSetterPreflight,
             "Check pad add-in chain validity and candidate native setter state.");
+        menu += new MenuEntry("Install PASS-THROUGH frame hook", nullptr, HookPassThrough,
+            "Find a unique USA function signature and let human input through unchanged.");
+        menu += new MenuEntry("Native frame-hook diagnostics", nullptr, NativeHookDiagnostics,
+            "Native hook frames, physical A calibration, pulse and release evidence.");
         menu += new MenuEntry("Queue 5s SAFETY dry run", nullptr, QueueDryRun,
             "Countdown and B/START abort, no artificial input or game-memory writes.");
-        menu += new MenuEntry("ABORT safety dry run", nullptr, CancelControl,
-            "Abort the countdown; physical B also aborts.");
+        menu += new MenuEntry("ABORT control experiment", nullptr, CancelControl,
+            "Abort countdown or active test; physical B also aborts.");
+        menu += new MenuEntry("Queue NATIVE 3-frame A pulse", nullptr, QueueNativePulse,
+            "Unverified input test, locked behind pass-through + two safety dry runs.");
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
@@ -2103,6 +2153,11 @@ namespace CTRPluginFramework
         // hardware diagnostic branch. Original P006 keeps the experiment.
         OSD::Run(DrawStatus);
         menu.Run();
+        g_nativePulseState = 0;
+        g_nativePlayerPad = 0;
+        g_nativeHookEnabled = false;
+        if (g_nativeHook.IsEnabled())
+            g_nativeHook.Disable();
         OSD::Stop(DrawStatus);
         return 0;
     }
