@@ -1,39 +1,24 @@
-# Collie Kart Portable — P001 Systems Check
+# Collie Kart Portable — P002 (experimental telemetry)
 
-**Status:** Experimental. This is a UI-only 3GX plugin prototype for Mario Kart 7 (MK7). It is not a learning agent.
+P001 has been verified to load on a real New 3DS running USA Mario Kart 7, draw the bottom-left status line, toggle READY/INACTIVE, show diagnostics, and continue working during a Time Trial.
 
-## Tests
+P002 preserves its approved indicator position, with no autonomous controls, learning, game-memory writes, or file writes. It adds opt-in *read-only* telemetry from an **unverified hypothesis** based on [mk7re/MK7-Emu-Scripts](https://github.com/mk7re/MK7-Emu-Scripts), specifically common.py, Vehicle.py, and LapRankChecker.py. Those scripts were tested in Citra, **not on actual 3DS hardware**.
 
-- Verify that the current process has an MK7 Title ID (USA/EUR/JPN).
-- Draw a small bottom-screen status indicator (INACTIVE by default).
-- Toggle a display-only READY / INACTIVE flag from the CTRPluginFramework menu.
-- Display basic diagnostics (region, toggle count, disabled systems).
-- Leave game memory, controller inputs, save data, and SD storage untouched.
+## What to test
 
-**Important:** Title ID verification does **not** detect an active race. READY is only a test flag, not permission for autonomous driving.
+1. **First back up your working P001 .3gx!** P002 is experimental native code and could freeze the game.
+2. Download the successful "Collie-Kart-P002-3GX" GitHub Actions artifact, extract the compiled file, rename to CollieKart.3gx, and replace the P001 file in the verified USA folder: SD:/luma/plugins/0004000000030800/CollieKart.3gx. Do not install alongside other MK7 plugins.
+3. Launch MK7. Confirm "CK P002 | INACTIVE" appears at exactly the same bottom-left location as P001.
+4. Select -> plugin menu -> "Read telemetry snapshot" while on the **main menu**. Note the diagnostic stage; absence of a race is expected.
+5. Enter a solo Time Trial (Toad Circuit). Before moving, open "Read telemetry snapshot" again. Record any lap, checkpoint, progress, position and speed values; unknown/unavailable is a useful result.
+6. If values appear reasonable, set READY and enable "Toggle live telemetry". When the menu closes, an optional yellow line appears directly above the status label. "OBS?" explicitly means **unverified observations**. Drive a short distance and assess if checkpoint, completion and speed change appropriately.
+7. Test returning to MK7 menus and exiting the game. Observe flicker/frame-rate impact and report unexpected crashes. If unstable, disable Plugin Loader, remove P002 and restore P001 from your backup.
 
-## Build
+## Important limits
 
-The repository includes a GitHub Actions workflow in `.github/workflows/makefile.yml`. Pull requests targeting `master` trigger a build using `pablomk7/libctrpf:0.8.0`. The Makefile intentionally outputs `CTRPluginFramework-BlankTemplate.3gx`, matching the existing artifact step. Rename this compiled file to `CollieKart.3gx` when installing.
-
-If Actions is disabled on a new fork, enable it in the repository's **Actions** tab. Only install the plugin after a successful build, and do not merge this branch merely to start a test.
-
-## Installation (New 3DS with Luma3DS 3GX loader)
-
-1. Back up your MK7 save and any existing plugins. Do not replace `boot.firm`.
-2. Confirm your installed MK7 Title ID (FBI), especially on region-changed consoles.
-3. Download and unzip the successful GitHub Actions **Plugin 3GX File** artifact on your iPhone.
-4. Place just the compiled `.3gx` in your game's SD plugin folder, for example:
-   - USA: `SD:/luma/plugins/0004000000030800/CollieKart.3gx`
-   - EUR: `SD:/luma/plugins/0004000000030700/CollieKart.3gx`
-   - JPN: `SD:/luma/plugins/0004000000030600/CollieKart.3gx`
-5. Do not use `default.3gx`. Do not load CTGP-7 or other MK7 game plugins for the first test.
-6. Enable **Plugin Loader** via Luma3DS Rosalina and launch Mario Kart 7.
-7. Open the CTRPF menu (usually Select), choose **Show diagnostics**, toggle READY / INACTIVE, and check the small bottom-screen label when the menu is closed.
-8. Try MK7's title menu and a solo Time Trial. Normal driving must remain unaffected.
-
-## If the test fails
-
-Disable Plugin Loader in Rosalina, close the game, remove this `.3gx` using the microSD adapter, and try again after reporting the exact issue. No learning data should exist for P001.
-
-The plugin uses a generic bottom-screen location near the lower edge, **not yet verified to be unobtrusive in MK7**. Please report overlap or flicker so we can adjust it.
+- Currently only USA telemetry addresses are attempted; other MK7 regional copies retain the display but their telemetry reads are disabled.
+- The static pointer hypothesis comes from the USA rev1/rev2 Citra scripts and **may not fit MK7 2.4.0 running on this console**.
+- The probe uses Process::ReadXX APIs and pointer/range validation. These reduce risk but cannot guarantee stability.
+- Incomplete or nonsensical results should be reported, **not interpreted as real telemetry**.
+- P002 deliberately does **not** claim to detect an active race yet, does not perform AI training, and does not write any files to SD. We'll add those only after physical validation.
+- Keep the plugin on a separate P002 development branch; do not merge until tested.
