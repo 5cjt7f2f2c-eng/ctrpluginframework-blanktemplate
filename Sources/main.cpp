@@ -1856,6 +1856,10 @@ namespace CTRPluginFramework
             "Read-only inspect the MK7 pad subsystem chain at up to 5Hz.");
         menu += new MenuEntry("Native setter diagnostics", nullptr, ShowSetterPreflight,
             "Check pad add-in chain validity and candidate native setter state.");
+        menu += new MenuEntry("Queue 5s SAFETY dry run", nullptr, QueueDryRun,
+            "Countdown and B/START abort, no artificial input or game-memory writes.");
+        menu += new MenuEntry("ABORT safety dry run", nullptr, CancelControl,
+            "Abort the countdown; physical B also aborts.");
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
