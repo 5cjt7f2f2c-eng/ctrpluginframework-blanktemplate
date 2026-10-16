@@ -1,10 +1,10 @@
-name: Collie Kart P004 Environment Rewards Build
+name: Collie Kart P005 Sensor Fusion Build
 
 on:
   push:
-    branches: [master, collie-kart-p001, collie-kart-p002-telemetry-probe, collie-kart-p003-flight-recorder, collie-kart-p004-environment-rewards]
+    branches: [master, collie-kart-p001, collie-kart-p002-telemetry-probe, collie-kart-p003-flight-recorder, collie-kart-p004-environment-rewards, collie-kart-p005-sensor-fusion]
   pull_request:
-    branches: [master, collie-kart-p001, collie-kart-p002-telemetry-probe, collie-kart-p003-flight-recorder]
+    branches: [master, collie-kart-p001, collie-kart-p002-telemetry-probe, collie-kart-p003-flight-recorder, collie-kart-p004-environment-rewards]
   workflow_dispatch:
 
 jobs:
@@ -15,17 +15,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build P004
+      - name: Build P005
         run: make
       - name: Upload plugin 3GX
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P004-3GX
+          name: Collie-Kart-P005-3GX
           path: CTRPluginFramework-BlankTemplate.3gx
           if-no-files-found: error
       - name: Upload debug ELF
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P004-ELF
+          name: Collie-Kart-P005-ELF
           path: CTRPluginFramework-BlankTemplate.elf
           if-no-files-found: error
