@@ -3,19 +3,19 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 1
+    Revision: 2
 
 Targets:
 
-Title: Collie Kart Portable P001
+Title: Collie Kart Portable P002
 
-Summary: MK7-specific UI-only systems test
+Summary: MK7-specific read-only telemetry experiment
 
 Description: |
-    Verifies Mario Kart 7's Title ID and draws a small status
-    label on the bottom screen. Provides a READY/INACTIVE toggle
-    and diagnostics menu. No game-memory edits, input injection,
-    training, or SD file writes.
+    Retains P001 status display and enables optional read-only
+    observations of lap progress, checkpoint, position and speed.
+    Memory layout is derived from Citra and unverified on 3DS.
+    No game memory changes, controls, learning, or file writing.
 
 Compatibility: Any
 
