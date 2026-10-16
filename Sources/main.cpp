@@ -1624,12 +1624,8 @@ namespace CTRPluginFramework
             "Read-only OSD callback, full-probe and environment timings.");
         menu += new MenuEntry("Profiler & control diagnostics", nullptr, ShowProfiler,
             "Frame callback timing, experimental control status and abort reason.");
-        menu += new MenuEntry("Queue DRY RUN (no input)", nullptr, QueueDryRun,
-            "Countdown test with NO artificial buttons. Test physical B abort.");
         // Real A-key injection intentionally NOT exposed in this read-only
         // hardware diagnostic branch. Original P006 keeps the experiment.
-        menu += new MenuEntry("ABORT control experiment", nullptr, CancelControl,
-            "Cancel any queued experiment. Physical B/START also abort.");
         OSD::Run(DrawStatus);
         menu.Run();
         OSD::Stop(DrawStatus);
