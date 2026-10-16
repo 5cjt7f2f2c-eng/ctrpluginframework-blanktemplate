@@ -731,7 +731,8 @@ namespace CTRPluginFramework
             {
                 // Verify returning to the original function's physical
                 // input *without* writing anything ourselves.
-                if (!(physical & 0x0001))
+                if (!(physical & 0x0001) &&
+                    g_nativeReleaseFrames < 12)
                     ++g_nativeReleaseFrames;
                 return;
             }
@@ -1521,7 +1522,13 @@ namespace CTRPluginFramework
             {
                 SampleGameControls(true);
                 if (now >= g_controlObserveEndAt)
-                    g_control = FINISHED;
+                {
+                    if (!g_controlIsDryRun &&
+                        g_nativeReleaseFrames < 3)
+                        AbortControl("No confirmed normal-input frames");
+                    else
+                        g_control = FINISHED;
+                }
             }
         }
 
@@ -2114,7 +2121,18 @@ namespace CTRPluginFramework
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
-            "Retains P001's display-only status toggle.");
+            "Master safety toggle for telemetry and native control.");
+        // P006.3 core tests stay at the top; the legacy diagnostics follow.
+        menu += new MenuEntry("1: Install PASS-THROUGH hook", nullptr, HookPassThrough,
+            "Native hook verification, no artificial input. Calibration first.");
+        menu += new MenuEntry("2: Native hook diagnostics", nullptr, NativeHookDiagnostics,
+            "Verify frame callbacks and real A input; inspect pulse results.");
+        menu += new MenuEntry("3: Queue 5s SAFETY dry run", nullptr, QueueDryRun,
+            "No injection; after a finish, repeat and press B to abort.");
+        menu += new MenuEntry("4: Queue NATIVE 3-frame A pulse", nullptr, QueueNativePulse,
+            "EXPERIMENT: only after A calibration and two dry-run safety checks.");
+        menu += new MenuEntry("5: ABORT control experiment", nullptr, CancelControl,
+            "Cancel countdown/pulse; physical B also aborts.");
         menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
             "Status of the last attempted telemetry probe.");
         menu += new MenuEntry("Read telemetry snapshot", nullptr, Snapshot,
@@ -2131,16 +2149,8 @@ namespace CTRPluginFramework
             "Read-only inspect the MK7 pad subsystem chain at up to 5Hz.");
         menu += new MenuEntry("Native setter diagnostics", nullptr, ShowSetterPreflight,
             "Check pad add-in chain validity and candidate native setter state.");
-        menu += new MenuEntry("Install PASS-THROUGH frame hook", nullptr, HookPassThrough,
-            "Find a unique USA function signature and let human input through unchanged.");
-        menu += new MenuEntry("Native frame-hook diagnostics", nullptr, NativeHookDiagnostics,
-            "Native hook frames, physical A calibration, pulse and release evidence.");
-        menu += new MenuEntry("Queue 5s SAFETY dry run", nullptr, QueueDryRun,
-            "Countdown and B/START abort, no artificial input or game-memory writes.");
-        menu += new MenuEntry("ABORT control experiment", nullptr, CancelControl,
-            "Abort countdown or active test; physical B also aborts.");
-        menu += new MenuEntry("Queue NATIVE 3-frame A pulse", nullptr, QueueNativePulse,
-            "Unverified input test, locked behind pass-through + two safety dry runs.");
+
+
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
@@ -2149,8 +2159,7 @@ namespace CTRPluginFramework
             "Read-only OSD callback, full-probe and environment timings.");
         menu += new MenuEntry("Profiler & control diagnostics", nullptr, ShowProfiler,
             "Frame callback timing, experimental control status and abort reason.");
-        // Real A-key injection intentionally NOT exposed in this read-only
-        // hardware diagnostic branch. Original P006 keeps the experiment.
+        // No HID injection. Native A is a separate, opt-in frame experiment.
         OSD::Run(DrawStatus);
         menu.Run();
         g_nativePulseState = 0;
