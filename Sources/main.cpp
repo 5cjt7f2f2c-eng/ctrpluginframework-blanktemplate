@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include "CTRPluginFramework/System/Directory.hpp"
+#include "CTRPluginFramework/System/File.hpp"
 
 namespace CTRPluginFramework
 {
@@ -20,7 +22,12 @@ namespace CTRPluginFramework
         constexpr u32 ENGINE_XOR = 0x75F1B26B;
 
         bool g_verified = false, g_ready = false, g_live = false;
+        bool g_recording = false;
+        bool g_bufferFull = false;
         unsigned g_toggles = 0, g_samples = 0, g_frames = 0;
+        unsigned g_invalidSamples = 0;
+        u64 g_startedMs = 0;
+        std::string g_lastFile = "(none)";
         const char *g_region = "UNKNOWN";
 
         struct Observation
@@ -34,6 +41,184 @@ namespace CTRPluginFramework
             float x = 0, y = 0, z = 0, speed = 0;
         };
         Observation g_observation;
+
+        // RAM-only buffer: 2 samples/sec x 15 minutes maximum.
+        // No filesystem writes happen from DrawStatus or Probe.
+        constexpr unsigned MAX_LOG_SAMPLES = 1800;
+        struct Record
+        {
+            u32 elapsedMs = 0;
+            Observation value;
+        };
+        Record g_records[MAX_LOG_SAMPLES];
+        unsigned g_count = 0;
+
+        void CaptureSample()
+        {
+            if (!g_recording || g_count >= MAX_LOG_SAMPLES)
+                return;
+
+            Record &r = g_records[g_count++];
+            u64 now = osGetTime();
+            r.elapsedMs = now >= g_startedMs
+                          ? static_cast<u32>(now - g_startedMs) : 0;
+            r.value = g_observation;
+            if (!r.value.candidate)
+                ++g_invalidSamples;
+
+            if (g_count >= MAX_LOG_SAMPLES)
+            {
+                g_recording = false; // Preserve buffered data for Stop & Save.
+                g_bufferFull = true;
+            }
+        }
+
+        void StartRecording(MenuEntry *)
+        {
+            if (!g_verified || Process::GetTitleID() != MK7_USA)
+            {
+                MessageBox("Recorder unavailable",
+                    "P003's memory layout is currently supported only for MK7 USA.")();
+                return;
+            }
+            if (!g_ready)
+            {
+                MessageBox("Recorder inactive",
+                    "First toggle CK P003 to READY, then start recording.")();
+                return;
+            }
+            if (g_recording)
+            {
+                MessageBox("Already recording",
+                    "Use Stop & Save before starting another session.")();
+                return;
+            }
+            if (g_count != 0)
+            {
+                MessageBox("Unsaved samples",
+                    "Use Stop & Save to save the existing session before starting another.")();
+                return;
+            }
+
+            g_recording = true;
+            g_bufferFull = false;
+            g_startedMs = osGetTime();
+            g_frames = 0;
+            g_invalidSamples = 0;
+            g_observation = Observation();
+            MessageBox("Flight recorder started",
+                "Close the plugin menu and drive a short Time Trial.\n"
+                "When finished, open this menu and choose Stop & Save.")();
+        }
+
+        void StopAndSave(MenuEntry *)
+        {
+            // Stop sampling before making any filesystem calls.
+            g_recording = false;
+            if (g_count == 0)
+            {
+                MessageBox("Nothing to save",
+                    "Start recording, close the menu, and drive first.")();
+                return;
+            }
+
+            // Scope all writes to one dedicated SD folder.
+            const std::string folder = "/CollieKart";
+            if (Directory::IsExists(folder) != 1 &&
+                Directory::Create(folder) != Directory::SUCCESS)
+            {
+                MessageBox("Recorder save failed",
+                    "Could not create SD:/CollieKart. Samples are still in RAM.")();
+                return;
+            }
+
+            char basename[48];
+            std::string filePath;
+            bool freeName = false;
+            for (unsigned i = 1; i <= 999; ++i)
+            {
+                std::snprintf(basename, sizeof(basename),
+                    "/CollieKart/session_%03u.csv", i);
+                filePath = basename;
+                if (File::Exists(filePath) == 0)
+                {
+                    freeName = true;
+                    break;
+                }
+            }
+            if (!freeName)
+            {
+                MessageBox("Recorder save failed",
+                    "All 999 session filenames are occupied. No existing logs were replaced.")();
+                return;
+            }
+
+            if (File::Create(filePath) != File::SUCCESS)
+            {
+                MessageBox("Recorder save failed",
+                    "Could not create a session file. Samples remain in RAM.")();
+                return;
+            }
+
+            File csv;
+            if (File::Open(csv, filePath, File::WRITE | File::TRUNCATE) != File::SUCCESS)
+            {
+                MessageBox("Recorder save failed",
+                    "Could not open session file. Samples remain in RAM.")();
+                return;
+            }
+
+            bool saved = (csv.WriteLine(
+                "elapsed_ms,valid,lap,checkpoint,completion,max_completion,"
+                "pos_x,pos_y,pos_z,speed_valid,speed_game_units,probe_stage") == File::SUCCESS);
+
+            char line[260];
+            for (unsigned i = 0; saved && i < g_count; ++i)
+            {
+                const Record &r = g_records[i];
+                const Observation &v = r.value;
+                int length = std::snprintf(line, sizeof(line),
+                    "%lu,%d,%d,%u,%.6f,%.6f,%.3f,%.3f,%.3f,%d,%.4f,%s",
+                    static_cast<unsigned long>(r.elapsedMs),
+                    v.candidate ? 1 : 0,
+                    v.candidate ? v.lap : 0,
+                    v.candidate ? v.checkpoint : 0,
+                    v.candidate ? v.progress : 0.0f,
+                    v.candidate ? v.maxProgress : 0.0f,
+                    v.candidate ? v.x : 0.0f,
+                    v.candidate ? v.y : 0.0f,
+                    v.candidate ? v.z : 0.0f,
+                    v.speedValid ? 1 : 0,
+                    v.speedValid ? v.speed : 0.0f,
+                    v.stage);
+                if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
+                    csv.WriteLine(line) != File::SUCCESS)
+                    saved = false;
+            }
+            if (csv.Flush() != File::SUCCESS)
+                saved = false;
+            if (csv.Close() != File::SUCCESS)
+                saved = false;
+
+            if (!saved)
+            {
+                MessageBox("Recorder save incomplete",
+                    "SD write failed. A PARTIAL CSV may exist.\n"
+                    "Samples remain in RAM for another attempt.")();
+                return;
+            }
+
+            unsigned written = g_count;
+            g_lastFile = filePath;
+            g_count = 0;
+            g_invalidSamples = 0;
+            g_bufferFull = false;
+            std::string msg = "Saved " + std::to_string(written) +
+                " samples to SD:" + g_lastFile +
+                "\n\nYou can retrieve it with your iPhone.";
+            MessageBox("Flight recorder saved", msg)();
+        }
+
 
         bool PlausibleAddress(u32 address)
         {
@@ -141,15 +326,22 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P002 | READY" : "CK P002 | INACTIVE",
+            screen.Draw(g_ready ? "CK P003 | READY" : "CK P003 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
+            // Sharing the same probe avoids duplicate reads when showing
+            // telemetry and recording simultaneously.
+            if (g_ready && (g_live || g_recording))
+            {
+                if (++g_frames % 30 == 0)
+                {
+                    Probe();
+                    if (g_recording)
+                        CaptureSample();
+                }
+            }
             if (g_live && g_ready)
             {
-                // Sample approximately twice per second at 60 FPS.
-                if (++g_frames % 30 == 0)
-                    Probe();
-
                 char line[96];
                 if (g_observation.candidate)
                 {
@@ -169,12 +361,26 @@ namespace CTRPluginFramework
                 screen.DrawRect(2, 211, 299, 12, Color::Black, true);
                 screen.Draw(line, 5, 212, Color::Yellow, Color::Black);
             }
+            if (g_recording && g_ready)
+            {
+                char rec[44];
+                std::snprintf(rec, sizeof(rec), "REC %u/%u", g_count, MAX_LOG_SAMPLES);
+                screen.DrawRect(185, 224, 115, 14, Color::Black, true);
+                screen.Draw(rec, 187, 226, Color::Green, Color::Black);
+            }
+            else if (g_bufferFull)
+            {
+                screen.DrawRect(185, 224, 115, 14, Color::Black, true);
+                screen.Draw("BUFFER FULL", 187, 226, Color::Yellow, Color::Black);
+            }
             return true;
         }
 
         void ToggleReady(MenuEntry *)
         {
             g_ready = !g_ready;
+            if (!g_ready)
+                g_recording = false; // Stop, but never discard pending data.
             ++g_toggles;
         }
         void ToggleLive(MenuEntry *)
@@ -192,9 +398,13 @@ namespace CTRPluginFramework
                 "\nTelemetry overlay: " + (g_live ? "ON" : "OFF") +
                 "\nSamples: " + std::to_string(g_samples) +
                 "\nProbe: " + g_observation.stage +
+                "\nRecorder: " + (g_recording ? "RECORDING" : "STOPPED") +
+                "\nBuffered rows: " + std::to_string(g_count) +
+                "\nInvalid rows: " + std::to_string(g_invalidSamples) +
+                "\nLast CSV: " + g_lastFile +
                 "\nRace detection: NOT VERIFIED\n"
-                "Controls: DISABLED\nLearning: DISABLED\nSD writes: NONE";
-            MessageBox("Collie Kart P002 Diagnostics", msg)();
+                "Controls: DISABLED\nLearning: DISABLED";
+            MessageBox("Collie Kart P003 Diagnostics", msg)();
         }
         void Snapshot(MenuEntry *)
         {
@@ -223,7 +433,7 @@ namespace CTRPluginFramework
                     msg += "Speed: UNAVAILABLE\n";
             }
             msg += "\nCompare values against real gameplay.";
-            MessageBox("P002 Experimental Snapshot", msg)();
+            MessageBox("P003 Experimental Snapshot", msg)();
         }
     }
 
@@ -240,9 +450,9 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P002", 0, 0, 2,
-            "Experimental read-only telemetry from emulator research.\n"
-            "No game writes or autonomous controls.");
+        PluginMenu menu("Collie Kart P003", 0, 0, 3,
+            "Passive buffered SD recorder.\n"
+            "No game-memory writes or autonomous controls.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
@@ -253,6 +463,10 @@ namespace CTRPluginFramework
             "Attempt a single read-only game-memory snapshot.");
         menu += new MenuEntry("Toggle live telemetry", nullptr, ToggleLive,
             "Opt-in sampled observations, only while READY.");
+        menu += new MenuEntry("Start recording", nullptr, StartRecording,
+            "Begin buffering telemetry in RAM. Requires READY.");
+        menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
+            "Stop capturing and save a new CSV under SD:/CollieKart.");
         OSD::Run(DrawStatus);
         menu.Run();
         OSD::Stop(DrawStatus);
