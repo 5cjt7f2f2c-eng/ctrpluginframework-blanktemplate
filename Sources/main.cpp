@@ -1,7 +1,7 @@
-// Collie Kart Portable P004 -- passive environment and reward diagnostics.
-// No game-memory writes, controller injection, or machine learning.
-// P002 telemetry and P003's optional SD CSV saving are retained.
-// Mode flags from mk7re/MK7-Memory: candidate until hardware validated.
+// Collie Kart Portable P005 -- passive sensor fusion and reward diagnostics.
+// Compiled research prototype. No controller injection, game RAM writes,
+// learning or automatic SD writes. Stop & Save CSV is opt-in.
+// P001 HUD, P002 telemetry, P003 flight recorder and P004 rewards preserved.
 
 #include <3ds.h>
 #include <CTRPluginFramework.hpp>
@@ -25,8 +25,15 @@ namespace CTRPluginFramework
         bool g_verified = false, g_ready = false, g_live = false;
         bool g_recording = false;
         bool g_bufferFull = false;
-        unsigned g_toggles = 0, g_samples = 0, g_frames = 0;
+        unsigned g_toggles = 0, g_samples = 0;
         unsigned g_invalidSamples = 0;
+        // Time-based sampling avoids P004's assumption that OSD ran at 60Hz.
+        constexpr u64 TELEMETRY_INTERVAL_MS = 500;
+        constexpr u64 ENVIRONMENT_INTERVAL_MS = 100; // 10Hz target
+        constexpr u64 MAX_EVENT_GAP_MS = 350;
+        constexpr u64 BOOST_EVENT_COOLDOWN_MS = 400;
+        u64 g_lastTelemetryAt = 0, g_lastEnvironmentAt = 0;
+        u32 g_lastCaptureElapsed = 0;
         u64 g_startedMs = 0;
         std::string g_lastFile = "(none)";
         const char *g_region = "UNKNOWN";
@@ -66,16 +73,23 @@ namespace CTRPluginFramework
             u32 airFrames = 0, groundFrames = 0;
             u32 surfaceCode = 0xFFFFFFFF;
             u32 dashType = 0xFFFFFFFF;
+            bool brakeHeld = false; // Candidate physical B / brake input.
         };
         Environment g_environment;
         u32 g_vehicleAddress = 0;
         bool g_havePreviousFlags = false;
         u32 g_previousStatus = 0, g_previousBoost = 0;
-        u64 g_previousModeAt = 0;
+        u32 g_previousDashType = 0xFFFFFFFF;
+        u64 g_previousModeAt = 0, g_recentBrakeAt = 0;
+        u64 g_previousBoostEventAt = 0;
         Mode g_previousMode = UNKNOWN;
         unsigned g_gliderPadActivations = 0, g_boostPadActivations = 0;
         unsigned g_gliderDeployments = 0, g_forceCloseSignals = 0;
         unsigned g_airClosures = 0, g_landingClosures = 0;
+        unsigned g_dashPanelEdges = 0, g_boostFlagEdges = 0;
+        unsigned g_brakeWhileGliding = 0, g_brakeLinkedClosures = 0;
+        unsigned g_envPolls = 0, g_envReadFails = 0;
+        u32 g_envPollGapMs = 0, g_envLastReadMs = 0, g_envMaxReadMs = 0;
         u32 g_modeMs[5] = {0, 0, 0, 0, 0};
 
         // The reward evaluator is PASSIVE. Only new max progress receives
@@ -93,7 +107,15 @@ namespace CTRPluginFramework
             g_vehicleAddress = 0;
             g_havePreviousFlags = false;
             g_previousStatus = g_previousBoost = 0;
-            g_previousModeAt = 0;
+            g_previousDashType = 0xFFFFFFFF;
+            g_previousModeAt = g_recentBrakeAt = 0;
+            g_previousBoostEventAt = 0;
+            g_dashPanelEdges = g_boostFlagEdges = 0;
+            g_brakeWhileGliding = g_brakeLinkedClosures = 0;
+            g_envPolls = g_envReadFails = 0;
+            g_envPollGapMs = g_envLastReadMs = g_envMaxReadMs = 0;
+            g_lastTelemetryAt = g_lastEnvironmentAt = 0;
+            g_lastCaptureElapsed = 0;
             g_previousMode = UNKNOWN;
             g_gliderPadActivations = g_boostPadActivations = 0;
             g_gliderDeployments = g_forceCloseSignals = 0;
@@ -120,6 +142,11 @@ namespace CTRPluginFramework
             unsigned gliderPads = 0, boostPads = 0, deployments = 0;
             unsigned forceClosures = 0, midairClosures = 0, landedClosures = 0;
             u32 durationMs[5] = {0, 0, 0, 0, 0};
+            unsigned dashPanelEdges = 0, boostFlagEdges = 0;
+            unsigned brakeWhileGliding = 0, brakeLinkedClosures = 0;
+            unsigned envPolls = 0, envReadFails = 0;
+            u32 pollGapMs = 0, pollReadMs = 0, maxPollReadMs = 0;
+            u32 sampleGapMs = 0;
         };
         Record g_records[MAX_LOG_SAMPLES];
         unsigned g_count = 0;
@@ -133,6 +160,10 @@ namespace CTRPluginFramework
             u64 now = osGetTime();
             r.elapsedMs = now >= g_startedMs
                           ? static_cast<u32>(now - g_startedMs) : 0;
+            r.sampleGapMs = g_lastCaptureElapsed != 0 &&
+                r.elapsedMs >= g_lastCaptureElapsed
+                ? r.elapsedMs - g_lastCaptureElapsed : 0;
+            g_lastCaptureElapsed = r.elapsedMs;
 
             r.value = g_observation;
             r.environment = g_environment;
@@ -142,6 +173,15 @@ namespace CTRPluginFramework
             r.forceClosures = g_forceCloseSignals;
             r.midairClosures = g_airClosures;
             r.landedClosures = g_landingClosures;
+            r.dashPanelEdges = g_dashPanelEdges;
+            r.boostFlagEdges = g_boostFlagEdges;
+            r.brakeWhileGliding = g_brakeWhileGliding;
+            r.brakeLinkedClosures = g_brakeLinkedClosures;
+            r.envPolls = g_envPolls;
+            r.envReadFails = g_envReadFails;
+            r.pollGapMs = g_envPollGapMs;
+            r.pollReadMs = g_envLastReadMs;
+            r.maxPollReadMs = g_envMaxReadMs;
             for (unsigned i = 0; i < 5; ++i)
                 r.durationMs[i] = g_modeMs[i];
 
@@ -200,13 +240,13 @@ namespace CTRPluginFramework
             if (!g_verified || Process::GetTitleID() != MK7_USA)
             {
                 MessageBox("Recorder unavailable",
-                    "P004's memory layout is currently supported only for MK7 USA.")();
+                    "P005's memory layout is currently supported only for MK7 USA.")();
                 return;
             }
             if (!g_ready)
             {
                 MessageBox("Recorder inactive",
-                    "First toggle CK P004 to READY, then start recording.")();
+                    "First toggle CK P005 to READY, then start recording.")();
                 return;
             }
             if (g_recording)
@@ -225,7 +265,7 @@ namespace CTRPluginFramework
             g_recording = true;
             g_bufferFull = false;
             g_startedMs = osGetTime();
-            g_frames = 0;
+            g_lastTelemetryAt = g_lastEnvironmentAt = 0;
             g_invalidSamples = 0;
             g_observation = Observation();
             ResetEnvironmentSession();
@@ -299,9 +339,14 @@ namespace CTRPluginFramework
                 "glider_deployments,force_close_signals,midair_glider_closures,"
                 "landing_glider_closures,ground_ms,underwater_ms,airborne_ms,gliding_ms,"
                 "reward_progress,reward_time,reward_lap,reward_total,"
-                "reward_cumulative") == File::SUCCESS);
+                "reward_cumulative,"
+                "dash_panel_edges,boost_flag_edges,brake_held,"
+                "brake_while_gliding_polls,brake_linked_midair_closures,"
+                "environment_polls,environment_read_failures,"
+                "environment_poll_gap_ms,environment_read_ms,"
+                "environment_max_read_ms,sample_gap_ms") == File::SUCCESS);
 
-            char line[700];
+            char line[900];
             for (unsigned i = 0; saved && i < g_count; ++i)
             {
                 const Record &r = g_records[i];
@@ -311,7 +356,8 @@ namespace CTRPluginFramework
                     "%lu,%d,%d,%u,%.6f,%.6f,%.3f,%.3f,%.3f,%d,%.4f,%s,"
                     "%s,%d,0x%08lX,0x%08lX,%lu,%lu,%lu,%lu,"
                     "%u,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
-                    "%.4f,%.4f,%.4f,%.4f,%.4f",
+                    "%.4f,%.4f,%.4f,%.4f,%.4f,"
+                    "%u,%u,%d,%u,%u,%u,%u,%lu,%lu,%lu,%lu",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -338,7 +384,15 @@ namespace CTRPluginFramework
                     static_cast<unsigned long>(r.durationMs[AIRBORNE]),
                     static_cast<unsigned long>(r.durationMs[GLIDING]),
                     r.rewardProgress, r.rewardTime, r.rewardLap,
-                    r.rewardTotal, r.cumulativeReward);
+                    r.rewardTotal, r.cumulativeReward,
+                    r.dashPanelEdges, r.boostFlagEdges,
+                    e.brakeHeld ? 1 : 0,
+                    r.brakeWhileGliding, r.brakeLinkedClosures,
+                    r.envPolls, r.envReadFails,
+                    static_cast<unsigned long>(r.pollGapMs),
+                    static_cast<unsigned long>(r.pollReadMs),
+                    static_cast<unsigned long>(r.maxPollReadMs),
+                    static_cast<unsigned long>(r.sampleGapMs));
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -472,16 +526,28 @@ namespace CTRPluginFramework
         }
 
 
-        // Poll frequently, in RAM only. Rising edges avoid counting one pad
-        // for every game frame that its flag remains active.
-        void PollEnvironment()
+        // At most ~10Hz based on elapsed milliseconds, not frame count.
+        // Read-only: no file operations and no changes to the MK7 process.
+        // Snapshot from the plugin menu does not count events or time.
+        void PollEnvironment(bool menuSnapshot = false)
         {
+            const u64 started = osGetTime();
             Environment next;
+            if (!menuSnapshot)
+            {
+                ++g_envPolls;
+                if (g_previousModeAt && started >= g_previousModeAt)
+                    g_envPollGapMs = static_cast<u32>(started - g_previousModeAt);
+                else
+                    g_envPollGapMs = 0;
+            }
+
             if (g_vehicleAddress == 0 || !g_observation.candidate)
             {
                 g_environment = next;
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
+                if (!menuSnapshot) ++g_envReadFails;
                 return;
             }
 
@@ -494,20 +560,25 @@ namespace CTRPluginFramework
                 g_environment = next;
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
+                if (!menuSnapshot) ++g_envReadFails;
                 return;
             }
 
-            // Optional research fields. Unknown = 0xFFFFFFFF.
+            // Keep both pad-detection signals, plus raw source fields.
             u32 raw = 0;
-            if (ReadWord(v + 0xD14, raw) && raw <= 31)
-                next.surfaceCode = raw;
             if (ReadWord(v + 0xF98, raw) && raw <= 8)
                 next.dashType = raw;
+            if (ReadWord(v + 0xD14, raw) && raw <= 31)
+                next.surfaceCode = raw;
 
+            // P005: candidate B input telemetry, never injected or modified.
+            // This input read may need calibration against physical controls.
+            next.brakeHeld = Controller::IsKeyDown(Key::B);
             next.valid = true;
-            if ((next.statusFlags & 0x80) != 0)
+
+            if (next.statusFlags & 0x80)
                 next.mode = GLIDING;
-            else if ((next.statusFlags & 0x1000) != 0)
+            else if (next.statusFlags & 0x1000)
                 next.mode = UNDERWATER;
             else if (next.airFrames > 1 && next.groundFrames == 0)
                 next.mode = AIRBORNE;
@@ -516,47 +587,91 @@ namespace CTRPluginFramework
             else
                 next.mode = UNKNOWN;
 
-            u64 now = osGetTime();
-            // Exclude menu pauses from accumulated state durations; prevent
-            // stale flag-edge events after unexpectedly long polling gaps.
-            bool continuous = g_previousModeAt != 0 &&
-                now >= g_previousModeAt && now - g_previousModeAt <= 200;
-            if (g_recording && continuous && g_previousMode > UNKNOWN &&
-                g_previousMode <= GLIDING)
-                g_modeMs[g_previousMode] += static_cast<u32>(now - g_previousModeAt);
+            // Reading the menu must not create fake triggers or durations.
+            if (menuSnapshot)
+            {
+                g_environment = next;
+                g_havePreviousFlags = false;
+                g_previousModeAt = 0;
+                return;
+            }
+
+            const bool continuous = g_previousModeAt != 0 &&
+                started >= g_previousModeAt &&
+                started - g_previousModeAt <= MAX_EVENT_GAP_MS;
+            if (g_recording && continuous &&
+                g_previousMode > UNKNOWN && g_previousMode <= GLIDING)
+                g_modeMs[g_previousMode] +=
+                    static_cast<u32>(started - g_previousModeAt);
+
+            if (g_recording && next.brakeHeld)
+            {
+                g_recentBrakeAt = started;
+                if (next.mode == GLIDING)
+                    ++g_brakeWhileGliding;
+            }
 
             if (g_recording && g_havePreviousFlags && continuous)
             {
                 const u32 risingStatus = next.statusFlags & ~g_previousStatus;
                 const u32 risingBoost = next.boostFlags & ~g_previousBoost;
+                const bool padBoostFlagEdge = (risingBoost & 0x2) != 0;
+                const bool dashPanelEdge = (next.dashType == 6 &&
+                                            g_previousDashType != 6);
 
                 if (risingStatus & 0x100)
                     ++g_gliderPadActivations;
-                if (risingBoost & 0x2)
-                    ++g_boostPadActivations;
                 if (risingStatus & 0x80)
                     ++g_gliderDeployments;
                 if (risingStatus & 0x400)
                     ++g_forceCloseSignals;
 
-                // End-of-glide classification is a hypothesis:
-                // landing and midair closures are NOT yet penalties.
+                // Two different sources, one deduplicated pad-hit counter.
+                // dashType==6 is DASH_PANEL per mk7re/MK7-Memory.
+                if (padBoostFlagEdge)
+                    ++g_boostFlagEdges;
+                if (dashPanelEdge)
+                    ++g_dashPanelEdges;
+                if (padBoostFlagEdge || dashPanelEdge)
+                {
+                    if (g_previousBoostEventAt == 0 ||
+                        started - g_previousBoostEventAt >= BOOST_EVENT_COOLDOWN_MS)
+                    {
+                        ++g_boostPadActivations;
+                        g_previousBoostEventAt = started;
+                    }
+                }
+
+                // Do not assign any manual glider penalty yet.
                 if ((g_previousStatus & 0x80) &&
                     !(next.statusFlags & 0x80))
                 {
                     if (next.groundFrames > 0)
                         ++g_landingClosures;
                     else
+                    {
                         ++g_airClosures;
+                        if (g_recentBrakeAt &&
+                            started >= g_recentBrakeAt &&
+                            started - g_recentBrakeAt <= MAX_EVENT_GAP_MS)
+                            ++g_brakeLinkedClosures;
+                    }
                 }
             }
 
             g_environment = next;
             g_previousStatus = next.statusFlags;
             g_previousBoost = next.boostFlags;
+            g_previousDashType = next.dashType;
             g_previousMode = next.mode;
-            g_previousModeAt = now;
+            g_previousModeAt = started;
             g_havePreviousFlags = true;
+
+            const u64 completed = osGetTime();
+            g_envLastReadMs = completed >= started
+                ? static_cast<u32>(completed - started) : 0;
+            if (g_envLastReadMs > g_envMaxReadMs)
+                g_envMaxReadMs = g_envLastReadMs;
         }
 
         bool DrawStatus(const Screen &screen)
@@ -566,19 +681,30 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P004 | READY" : "CK P004 | INACTIVE",
+            screen.Draw(g_ready ? "CK P005 | READY" : "CK P005 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
-            // Sharing the same probe avoids duplicate reads when showing
-            // telemetry and recording simultaneously.
+            // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
+            // Only ~2Hz full pointer walks; <=10Hz lightweight flag reads.
             if (g_ready && (g_live || g_recording))
             {
-                if (++g_frames % 30 == 0)
+                const u64 now = osGetTime();
+                bool dueTelemetry = g_lastTelemetryAt == 0 ||
+                    now < g_lastTelemetryAt ||
+                    now - g_lastTelemetryAt >= TELEMETRY_INTERVAL_MS;
+                if (dueTelemetry)
+                {
+                    g_lastTelemetryAt = now;
                     Probe();
-                // Lightweight candidate flag polling once per display frame.
-                // Avoid capturing new CSV rows until mode was polled.
-                PollEnvironment();
-                if (g_recording && g_frames % 30 == 0)
+                }
+                if (g_lastEnvironmentAt == 0 ||
+                    now < g_lastEnvironmentAt ||
+                    now - g_lastEnvironmentAt >= ENVIRONMENT_INTERVAL_MS)
+                {
+                    g_lastEnvironmentAt = now;
+                    PollEnvironment();
+                }
+                if (g_recording && dueTelemetry)
                     CaptureSample();
             }
             if (g_live && g_ready)
@@ -639,12 +765,15 @@ namespace CTRPluginFramework
         void ToggleLive(MenuEntry *)
         {
             g_live = !g_live;
-            g_frames = 0;
-            g_observation = Observation();
-            g_vehicleAddress = 0;
-            g_environment = Environment();
-            g_havePreviousFlags = false;
-            g_previousModeAt = 0;
+            if (!g_recording)
+            {
+                g_lastTelemetryAt = g_lastEnvironmentAt = 0;
+                g_observation = Observation();
+                g_vehicleAddress = 0;
+                g_environment = Environment();
+                g_havePreviousFlags = false;
+                g_previousModeAt = 0;
+            }
         }
         void ShowDiagnostics(MenuEntry *)
         {
@@ -661,11 +790,15 @@ namespace CTRPluginFramework
                 "\nMode: " + ModeName(g_environment.mode) +
                 "\nPads glide/boost: " + std::to_string(g_gliderPadActivations) +
                     "/" + std::to_string(g_boostPadActivations) +
+                "\nDash/flag edges: " + std::to_string(g_dashPanelEdges) +
+                    "/" + std::to_string(g_boostFlagEdges) +
+                "\nEnv polls/errors: " + std::to_string(g_envPolls) +
+                    "/" + std::to_string(g_envReadFails) +
                 "\nReward total (test): " + std::to_string(g_totalReward) +
                 "\nLast CSV: " + g_lastFile +
                 "\nRace detection: NOT VERIFIED\n"
                 "Controls: DISABLED\nLearning: DISABLED";
-            MessageBox("Collie Kart P004 Diagnostics", msg)();
+            MessageBox("Collie Kart P005 Diagnostics", msg)();
         }
         void Snapshot(MenuEntry *)
         {
@@ -694,25 +827,29 @@ namespace CTRPluginFramework
                     msg += "Speed: UNAVAILABLE\n";
             }
             msg += "\nCompare values against real gameplay.";
-            MessageBox("P004 Experimental Snapshot", msg)();
+            MessageBox("P005 Experimental Snapshot", msg)();
         }
 
         void ShowEnvironment(MenuEntry *)
         {
             // Menu is paused: attempt a fresh, read-only snapshot first.
             Probe();
-            PollEnvironment();
+            PollEnvironment(true); // No event counters from paused menu.
             const Environment &e = g_environment;
-            char lines[560];
+            char lines[920];
             std::snprintf(lines, sizeof(lines),
                 "Mode: %s (%s)\n"
                 "Flags: status 0x%08lX boost 0x%08lX\n"
                 "Air frames: %lu  Ground frames: %lu\n"
                 "KCL surface: %lu  Dash type: %lu\n"
                 "Glide pads: %u  Boost pads: %u\n"
+                "Dash/flag edges: %u/%u\n"
                 "Glider deploys: %u\n"
                 "Force-close flag: %u\n"
                 "Midair closes: %u  Land closes: %u\n"
+                "B brake held: %s  Linked closes: %u\n"
+                "Env polls/fails: %u/%u\n"
+                "Poll gap: %lums read: %lums (max %lu)\n"
                 "Ground: %lus  Water: %lus\n"
                 "Air: %lus  Glide: %lus\n"
                 "Last reward: %.3f  Total: %.3f\n"
@@ -725,14 +862,20 @@ namespace CTRPluginFramework
                 static_cast<unsigned long>(e.surfaceCode),
                 static_cast<unsigned long>(e.dashType),
                 g_gliderPadActivations, g_boostPadActivations,
+                g_dashPanelEdges, g_boostFlagEdges,
                 g_gliderDeployments, g_forceCloseSignals,
                 g_airClosures, g_landingClosures,
+                e.brakeHeld ? "YES" : "NO", g_brakeLinkedClosures,
+                g_envPolls, g_envReadFails,
+                static_cast<unsigned long>(g_envPollGapMs),
+                static_cast<unsigned long>(g_envLastReadMs),
+                static_cast<unsigned long>(g_envMaxReadMs),
                 static_cast<unsigned long>(g_modeMs[GROUND] / 1000),
                 static_cast<unsigned long>(g_modeMs[UNDERWATER] / 1000),
                 static_cast<unsigned long>(g_modeMs[AIRBORNE] / 1000),
                 static_cast<unsigned long>(g_modeMs[GLIDING] / 1000),
                 g_latestReward, g_totalReward);
-            MessageBox("P004 Environment & Rewards", lines)();
+            MessageBox("P005 Environment & Rewards", lines)();
         }
     }
 
@@ -749,8 +892,8 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P004", 0, 0, 4,
-            "Passive environment and reward evaluation.\n"
+        PluginMenu menu("Collie Kart P005", 0, 0, 5,
+            "Low-overhead pad fusion and passive rewards.\n"
             "No game-memory writes or autonomous controls.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
@@ -763,7 +906,7 @@ namespace CTRPluginFramework
         menu += new MenuEntry("Toggle live telemetry", nullptr, ToggleLive,
             "Opt-in sampled observations, only while READY.");
         menu += new MenuEntry("Environment & rewards", nullptr, ShowEnvironment,
-            "Read candidate driving mode, pad activations and reward counters.");
+            "Inspect grounded/gliding modes, fused pad signals, brake evidence and rewards.");
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
