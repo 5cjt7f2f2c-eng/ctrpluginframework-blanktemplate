@@ -1,9 +1,8 @@
-// Collie Kart Portable P006.2 -- read-only native setter preflight.
-// No native writes: validates KDPad add-in chain before an actual actuator test.
-// No writes to MK7 process memory or autonomous steering / machine learning.
-// One opt-in HID InjectKey(A) experiment after a full dry-run; release not yet
-// hardware-verified, so each experiment is isolated and deliberately short.
-// All prior P001-P005 sensor and SD recorder paths remain supported.
+// Collie Kart Portable P006.3 -- opt-in per-frame input hook experiment.
+// MK7-research frame-input interception with CTRPF MITM hook. No AI/autonomy.
+// Only the local player's A button can be substituted for 3 game frames.
+// Hook starts pass-through only; optional pulse separately safety-gated.
+// Previous P001-P006.2 passive telemetry, reward/CSV and backups preserved.
 
 #include <3ds.h>
 #include <CTRPluginFramework.hpp>
@@ -12,6 +11,7 @@
 #include <string>
 #include "CTRPluginFramework/System/Directory.hpp"
 #include "CTRPluginFramework/System/File.hpp"
+#include "CTRPluginFramework/System/Hook.hpp"
 
 namespace CTRPluginFramework
 {
@@ -144,6 +144,22 @@ namespace CTRPluginFramework
         };
         SetterPreflight g_setter;
 
+        // P006.3: Native game-frame input path, completely DISABLED on boot.
+        // Source: MK7-Revolution KDPadInputer::calcInput signature (not yet
+        // validated on MK7 USA console) and mk7re simulated-player frame hook.
+        Hook g_nativeHook;
+        bool g_nativeHookEnabled = false;
+        u32 g_nativeHookAddress = 0, g_nativeScanMatches = 0;
+        volatile u32 g_nativePlayerPad = 0;
+        volatile u32 g_nativeSeenFrames = 0, g_nativeManualAFrames = 0;
+        volatile u32 g_nativeReleaseFrames = 0, g_nativeInjectedFrames = 0;
+        volatile u32 g_nativeAbortSignal = 0;
+        volatile u32 g_nativePulseState = 0; // 0 OFF, 1 ARMED, 2 DONE, 3 ABORT
+        volatile u32 g_nativeDeadline = 0; // u32 milliseconds (bounded to < 1s)
+        volatile u32 g_nativeLastFrameMs = 0;
+        unsigned g_nativePulseTrials = 0;
+        constexpr u32 NATIVE_PULSE_MAX_FRAMES = 3;
+        constexpr u32 NATIVE_FRAME_TIMEOUT_MS = 350;
 
         struct Observation
         {
@@ -269,6 +285,9 @@ namespace CTRPluginFramework
             unsigned padAMatches = 0, vehicleAMatches = 0, allAMatches = 0;
             SetterPreflight setter;
             unsigned setterPolls = 0, setterFailures = 0, setterMatches = 0;
+            u32 nativeHookAddress = 0, nativeHookFrames = 0;
+            u32 nativeManualAFrames = 0, nativeInjectedFrames = 0;
+            u32 nativeReleaseFrames = 0, nativePulseState = 0;
         };
         Record g_records[MAX_LOG_SAMPLES];
         unsigned g_count = 0;
@@ -316,6 +335,12 @@ namespace CTRPluginFramework
             r.setterPolls = g_setterPolls;
             r.setterFailures = g_setterFailures;
             r.setterMatches = g_setterStructuralMatches;
+            r.nativeHookAddress = g_nativeHookAddress;
+            r.nativeHookFrames = g_nativeSeenFrames;
+            r.nativeManualAFrames = g_nativeManualAFrames;
+            r.nativeInjectedFrames = g_nativeInjectedFrames;
+            r.nativeReleaseFrames = g_nativeReleaseFrames;
+            r.nativePulseState = g_nativePulseState;
 
             r.value = g_observation;
             r.environment = g_environment;
@@ -514,7 +539,9 @@ namespace CTRPluginFramework
                 "setter_node1_addr,setter_node1_buttons,setter_node1_update,"
                 "setter_node2_addr,setter_node2_buttons,setter_node2_update,"
                 "setter_node3_addr,setter_node3_buttons,setter_node3_update,"
-                "setter_polls,setter_failures,setter_structural_matches") == File::SUCCESS);
+                "setter_polls,setter_failures,setter_structural_matches,"
+                "native_hook_address,native_hook_frames,native_manual_a_frames,"
+                "native_injected_frames,native_release_frames,native_pulse_state") == File::SUCCESS);
 
             char line[2100];
             for (unsigned i = 0; saved && i < g_count; ++i)
@@ -537,7 +564,7 @@ namespace CTRPluginFramework
                     "0x%08lX,0x%08lX,%u,"
                     "0x%08lX,0x%08lX,%u,"
                     "0x%08lX,0x%08lX,%u,"
-                    "%u,%u,%u",
+                    "%u,%u,%u,0x%08lX,%u,%u,%u,%u,%u",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -612,7 +639,11 @@ namespace CTRPluginFramework
                     static_cast<unsigned long>(r.setter.nodes[3].address),
                     static_cast<unsigned long>(r.setter.nodes[3].candidateButtons),
                     static_cast<unsigned>(r.setter.nodes[3].updateFlag),
-                    r.setterPolls, r.setterFailures, r.setterMatches);
+                    r.setterPolls, r.setterFailures, r.setterMatches,
+                    static_cast<unsigned long>(r.nativeHookAddress),
+                    r.nativeHookFrames, r.nativeManualAFrames,
+                    r.nativeInjectedFrames, r.nativeReleaseFrames,
+                    r.nativePulseState);
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -661,6 +692,206 @@ namespace CTRPluginFramework
                    std::isfinite(value);
         }
 
+
+
+        // MITM: original first, optionally modify only the local PLAYER pad's
+        // current game-frame input. Never intercept UI pad or steering here.
+        // If disabled, original input is returned on every frame unmodified.
+        void NativeInputHook(u32 inputer)
+        {
+            HookContext::GetCurrent().OriginalFunction<void>(inputer);
+            if (!g_nativeHookEnabled || !g_nativePlayerPad ||
+                inputer < 0x00100000 || inputer > 0x3FFF0000)
+                return;
+
+            // The original function has just filled m_data_on_frame from
+            // the *physical* controls. Validate this belongs to our kart.
+            const u32 pad = *reinterpret_cast<volatile u32 *>(inputer + 0x20);
+            if (pad != g_nativePlayerPad)
+                return;
+            const u32 frame = *reinterpret_cast<volatile u32 *>(inputer + 0x1C);
+            if (frame != pad + 0x1C)
+                return;
+            const u8 paused = *reinterpret_cast<volatile u8 *>(pad + 0x3D);
+            if (paused)
+                return;
+            volatile u16 *buttons =
+                reinterpret_cast<volatile u16 *>(frame);
+            const u16 physical = *buttons;
+            ++g_nativeSeenFrames;
+            const u32 now = static_cast<u32>(osGetTime());
+            g_nativeLastFrameMs = now;
+            if (physical & 0x0001)
+                ++g_nativeManualAFrames;
+
+            const u32 state = g_nativePulseState;
+            if (state == 2)
+            {
+                // Verify returning to the original function's physical
+                // input *without* writing anything ourselves.
+                if (!(physical & 0x0001))
+                    ++g_nativeReleaseFrames;
+                return;
+            }
+            if (state != 1)
+                return;
+            if (static_cast<s32>(g_nativeDeadline - now) < 0)
+            {
+                g_nativePulseState = 3; // timed-out: no more writes
+                g_nativeAbortSignal = 1;
+                return;
+            }
+            // B and A from the ORIGINAL game input always win. B aborts.
+            if (physical & 0x0002)
+            {
+                g_nativePulseState = 3;
+                g_nativeAbortSignal = 2;
+                return;
+            }
+            if (physical & 0x0001)
+            {
+                g_nativePulseState = 3;
+                g_nativeAbortSignal = 3;
+                return;
+            }
+            if (g_nativeInjectedFrames >= NATIVE_PULSE_MAX_FRAMES)
+            {
+                g_nativePulseState = 2;
+                return;
+            }
+            // One controlled in-game data write: acceleration bit only.
+            // We DO NOT write any saved override into the persistent pad,
+            // so the next original calcInput supplies normal physical input.
+            *buttons = static_cast<u16>(physical | 0x0001);
+            ++g_nativeInjectedFrames;
+            if (g_nativeInjectedFrames >= NATIVE_PULSE_MAX_FRAMES)
+                g_nativePulseState = 2;
+        }
+
+        // Signature from MK7-Revolution src/base/pointers.cpp. All four words
+        // must match uniquely in the current MK7 USA .text. Never use EUR2
+        // emulator addresses on this console.
+        u32 FindInputFunction()
+        {
+            g_nativeScanMatches = 0;
+            u32 hit = 0;
+            const u32 textStart = 0x00100000;
+            const u32 textSize = Process::GetTextSize();
+            if (textSize < 32 || textSize > 0x00900000)
+                return 0;
+            constexpr u32 sig[4] = {
+                0xE5901004, 0xE3510001, 0x1A000002, 0xE5901000
+            };
+            for (u32 a = textStart; a <= textStart + textSize - 16; a += 4)
+            {
+                if ((a & 0xFFF) == 0 &&
+                    !Process::CheckAddress(a, MEMPERM_READ))
+                    return 0;
+                const volatile u32 *insn =
+                    reinterpret_cast<const volatile u32 *>(a);
+                if (insn[0] == sig[0] && insn[1] == sig[1] &&
+                    insn[2] == sig[2] && insn[3] == sig[3])
+                {
+                    ++g_nativeScanMatches;
+                    hit = a;
+                    if (g_nativeScanMatches > 1)
+                        return 0;
+                }
+            }
+            return g_nativeScanMatches == 1 ? hit : 0;
+        }
+
+        void HookPassThrough(MenuEntry *)
+        {
+            if (Process::GetTitleID() != MK7_USA || !g_ready)
+            {
+                MessageBox("P006.3 hook locked",
+                    "Enter MK7 USA Time Trial and enable READY first.")();
+                return;
+            }
+            if (g_nativeHookEnabled)
+            {
+                MessageBox("P006.3 hook running",
+                    "Pass-through hook already installed. Test physical A,"
+                    " then examine native hook diagnostics.")();
+                return;
+            }
+            Probe();
+            if (!g_observation.candidate || !g_vehicleAddress)
+            {
+                MessageBox("P006.3 hook locked",
+                    "Vehicle not identified. Start Time Trial and stop on road.")();
+                return;
+            }
+            u32 pad = 0;
+            if (!ReadPointer(g_vehicleAddress + 0xE0, pad))
+            {
+                MessageBox("P006.3 hook locked", "Invalid local player pad.")();
+                return;
+            }
+            const u32 found = FindInputFunction();
+            if (!found)
+            {
+                char msg[160];
+                std::snprintf(msg, sizeof(msg),
+                    "USA calcInput signature matches: %lu (need exactly 1)."
+                    " No hook installed.",
+                    static_cast<unsigned long>(g_nativeScanMatches));
+                MessageBox("P006.3 incompatible signature", msg)();
+                return;
+            }
+            g_nativeHookAddress = found;
+            g_nativePlayerPad = pad;
+            g_nativePulseState = 0;
+            g_nativeHook.InitializeForMitm(found,
+                reinterpret_cast<u32>(&NativeInputHook));
+            HookResult result = g_nativeHook.Enable();
+            if (result != HookResult::Success)
+            {
+                g_nativeHookAddress = 0;
+                g_nativePlayerPad = 0;
+                MessageBox("P006.3 hook installation failed",
+                    "Hook framework rejected the address. No driving allowed.")();
+                return;
+            }
+            g_nativeHookEnabled = true;
+            MessageBox("P006.3 PASS-THROUGH enabled",
+                "No artificial input is active. Resume Time Trial and"
+                " hold physical A for 3 seconds; check native diagnostics."
+                " If the game behaves oddly, quit and disable Plugin Loader.")();
+        }
+
+        void NativeHookDiagnostics(MenuEntry *)
+        {
+            char msg[700];
+            std::snprintf(msg, sizeof(msg),
+                "Hook installed: %s\n"
+                "Signature matches: %lu\n"
+                "Hook addr: 0x%08lX\n"
+                "Player input frames: %lu\n"
+                "Physical-A hook frames: %lu\n"
+                "Pulse trials: %u\n"
+                "Native A frames: %lu\n"
+                "Pass-through release frames: %lu\n"
+                "Native state: %lu (0 off/1 arm/2 done/3 aborted)\n"
+                "Control phase: %s\n"
+                "Dry-run/physical B: %s/%s\n"
+                "HID input injection: DISABLED\n"
+                "Frame-hook compatibility is still UNVERIFIED",
+                g_nativeHookEnabled ? "YES" : "NO",
+                static_cast<unsigned long>(g_nativeScanMatches),
+                static_cast<unsigned long>(g_nativeHookAddress),
+                static_cast<unsigned long>(g_nativeSeenFrames),
+                static_cast<unsigned long>(g_nativeManualAFrames),
+                g_nativePulseTrials,
+                static_cast<unsigned long>(g_nativeInjectedFrames),
+                static_cast<unsigned long>(g_nativeReleaseFrames),
+                static_cast<unsigned long>(g_nativePulseState),
+                ControlName(g_control),
+                g_dryRunComplete ? "YES" : "NO",
+                g_physicalAbortVerified ? "YES" : "NO");
+            MessageBox("P006.3 Native Frame Hook", msg)();
+        }
 
         // mk7re/MK7-Memory: KDPad::m_data_on_frame +0x1C,
         // raw buttons +0x2C, active add-in +0x18, type +0x3C.
