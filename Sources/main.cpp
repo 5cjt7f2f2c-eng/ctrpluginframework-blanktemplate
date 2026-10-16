@@ -44,6 +44,16 @@ namespace CTRPluginFramework
         u64 g_prevCallbackAt = 0;
         u32 g_profileCallbackGapMs = 0, g_profileCallbackWorkMs = 0;
         u32 g_profileProbeMs = 0, g_profileMaxGapMs = 0, g_profileMaxWorkMs = 0;
+        u32 g_profileProbeUs = 0, g_profileCallbackWorkUs = 0;
+        u32 g_profileMaxWorkUs = 0, g_environmentReadUs = 0;
+        u32 ElapsedUs(u64 startTick)
+        {
+            const u64 endTick = svcGetSystemTick();
+            return endTick >= startTick
+                ? static_cast<u32>((endTick - startTick) * 1000000ULL /
+                                    SYSCLOCK_ARM11)
+                : 0;
+        }
         unsigned g_profileCallbacks = 0, g_profileLargeGaps = 0;
         u64 g_profileWorkTotalMs = 0;
 
@@ -190,6 +200,7 @@ namespace CTRPluginFramework
             u32 pollGapMs = 0, pollReadMs = 0, maxPollReadMs = 0;
             u32 sampleGapMs = 0;
             u32 callbackGapMs = 0, callbackWorkMs = 0, probeWorkMs = 0;
+            u32 callbackWorkUs = 0, probeWorkUs = 0, environmentReadUs = 0;
             unsigned callbackCount = 0, slowCallbacks = 0;
             unsigned injectionCalls = 0, abortedCount = 0;
             bool vehicleControlsValid = false;
@@ -215,6 +226,9 @@ namespace CTRPluginFramework
             r.callbackGapMs = g_profileCallbackGapMs;
             r.callbackWorkMs = g_profileCallbackWorkMs;
             r.probeWorkMs = g_profileProbeMs;
+            r.callbackWorkUs = g_profileCallbackWorkUs;
+            r.probeWorkUs = g_profileProbeUs;
+            r.environmentReadUs = g_environmentReadUs;
             r.callbackCount = g_profileCallbacks;
             r.slowCallbacks = g_profileLargeGaps;
             r.injectionCalls = g_hidInjectionCalls;
@@ -406,7 +420,8 @@ namespace CTRPluginFramework
                 "callback_gap_ms,callback_work_ms,probe_read_ms,"
                 "profiler_callbacks,callback_gaps_over_50ms,"
                 "control_phase,hid_injection_calls,control_aborts,"
-                "mk7_controls_valid,mk7_controls_raw") == File::SUCCESS);
+                "mk7_controls_valid,mk7_controls_raw,"
+                "callback_work_us,probe_read_us,environment_read_us") == File::SUCCESS);
 
             char line[1100];
             for (unsigned i = 0; saved && i < g_count; ++i)
@@ -420,7 +435,8 @@ namespace CTRPluginFramework
                     "%u,%u,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
                     "%.4f,%.4f,%.4f,%.4f,%.4f,"
                     "%u,%u,%d,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
-                    "%lu,%lu,%lu,%u,%u,%s,%u,%u,%d,0x%08lX",
+                    "%lu,%lu,%lu,%u,%u,%s,%u,%u,%d,0x%08lX,"
+                    "%lu,%lu,%lu",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -462,7 +478,10 @@ namespace CTRPluginFramework
                     r.callbackCount, r.slowCallbacks,
                     ControlName(r.controlPhase), r.injectionCalls,
                     r.abortedCount, r.vehicleControlsValid ? 1 : 0,
-                    static_cast<unsigned long>(r.vehicleControls));
+                    static_cast<unsigned long>(r.vehicleControls),
+                    static_cast<unsigned long>(r.callbackWorkUs),
+                    static_cast<unsigned long>(r.probeWorkUs),
+                    static_cast<unsigned long>(r.environmentReadUs));
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -601,6 +620,7 @@ namespace CTRPluginFramework
         // Snapshot from the plugin menu does not count events or time.
         void PollEnvironment(bool menuSnapshot = false)
         {
+            const u64 perfTick = svcGetSystemTick();
             const u64 started = osGetTime();
             Environment next;
             if (!menuSnapshot)
@@ -742,6 +762,7 @@ namespace CTRPluginFramework
                 ? static_cast<u32>(completed - started) : 0;
             if (g_envLastReadMs > g_envMaxReadMs)
                 g_envMaxReadMs = g_envLastReadMs;
+            g_environmentReadUs = ElapsedUs(perfTick);
         }
 
 
@@ -827,6 +848,11 @@ namespace CTRPluginFramework
             g_controlLastCallbackAt = now;
             if (g_control == COUNTDOWN)
             {
+                if (Controller::IsKeyDown(Key::A))
+                {
+                    AbortControl("A held during countdown");
+                    return;
+                }
                 if (g_observation.speed > 0.35f ||
                     g_observation.speed < -0.35f)
                 {
@@ -932,6 +958,8 @@ namespace CTRPluginFramework
             g_prevCallbackAt = 0;
             g_profileCallbackGapMs = g_profileCallbackWorkMs = 0;
             g_profileProbeMs = g_profileMaxGapMs = g_profileMaxWorkMs = 0;
+            g_profileProbeUs = g_profileCallbackWorkUs = 0;
+            g_profileMaxWorkUs = g_environmentReadUs = 0;
             g_profileCallbacks = g_profileLargeGaps = 0;
             g_profileWorkTotalMs = 0;
             MessageBox("P006 profiler", g_profilerEnabled
@@ -950,6 +978,8 @@ namespace CTRPluginFramework
                 "Callback work last/max: %lu/%lu ms\n"
                 "Average callback work: %.2f ms\n"
                 "Full telemetry probe: %lu ms\n"
+                "Callback work: %lu us (max %lu)\n"
+                "Probe/env read: %lu/%lu us\n"
                 "Environment polls/fails: %u/%u\n"
                 "Control phase: %s\n"
                 "Dry-run passed: %s\n"
@@ -968,6 +998,10 @@ namespace CTRPluginFramework
                 g_profileCallbacks ? static_cast<float>(g_profileWorkTotalMs) /
                     g_profileCallbacks : 0.0f,
                 static_cast<unsigned long>(g_profileProbeMs),
+                static_cast<unsigned long>(g_profileCallbackWorkUs),
+                static_cast<unsigned long>(g_profileMaxWorkUs),
+                static_cast<unsigned long>(g_profileProbeUs),
+                static_cast<unsigned long>(g_environmentReadUs),
                 g_envPolls, g_envReadFails, ControlName(g_control),
                 g_dryRunComplete ? "YES" : "NO",
                 g_physicalAbortVerified ? "YES" : "NO",
@@ -982,6 +1016,8 @@ namespace CTRPluginFramework
             if (screen.IsTop || !g_verified)
                 return true;
 
+            const u64 callbackTickStarted = g_profilerEnabled
+                ? svcGetSystemTick() : 0;
             const u64 callbackStarted = osGetTime();
             PluginMenu *runningMenu = PluginMenu::GetRunningInstance();
             const bool menuOpen = runningMenu && runningMenu->IsOpen();
@@ -1020,7 +1056,11 @@ namespace CTRPluginFramework
                 {
                     g_lastTelemetryAt = now;
                     const u64 probeStarted = osGetTime();
+                    const u64 probeTickStarted = g_profilerEnabled
+                        ? svcGetSystemTick() : 0;
                     Probe();
+                    if (g_profilerEnabled)
+                        g_profileProbeUs = ElapsedUs(probeTickStarted);
                     const u64 probeEnded = osGetTime();
                     g_profileProbeMs = probeEnded >= probeStarted
                         ? static_cast<u32>(probeEnded - probeStarted) : 0;
@@ -1099,6 +1139,9 @@ namespace CTRPluginFramework
                 if (g_profileCallbackWorkMs > g_profileMaxWorkMs)
                     g_profileMaxWorkMs = g_profileCallbackWorkMs;
                 g_profileWorkTotalMs += g_profileCallbackWorkMs;
+                g_profileCallbackWorkUs = ElapsedUs(callbackTickStarted);
+                if (g_profileCallbackWorkUs > g_profileMaxWorkUs)
+                    g_profileMaxWorkUs = g_profileCallbackWorkUs;
                 ++g_profileCallbacks;
             }
             return true;
