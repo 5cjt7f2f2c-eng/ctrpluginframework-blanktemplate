@@ -1,26 +1,21 @@
-Author: Nanquitas
+Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 
-Version: # Plugin version
+Version:
     Major: 0
-    Minor: 7
-    Revision: 2
+    Minor: 0
+    Revision: 1
 
-Targets: # Low TitleId of games which are compatibles with this plugin (0 for all)
+Targets:
 
-Title: CTRPF - Blank Template
+Title: Collie Kart Portable P001
 
-Summary: A CTRPF Plugin, with a lot of tools
+Summary: MK7-specific UI-only systems test
 
 Description: |
-  This plugin gives you access to a set of tools to edit your games
-
-  Features:
-    - Memory searcher
-    - Hex Editor
-    - Code creator
-    - Code import from file
-    - Action Replay engine with extra capabilities
-    - Super fast screenshot engine
+    Verifies Mario Kart 7's Title ID and draws a small status
+    label on the bottom screen. Provides a READY/INACTIVE toggle
+    and diagnostics menu. No game-memory edits, input injection,
+    training, or SD file writes.
 
 Compatibility: Any
 
