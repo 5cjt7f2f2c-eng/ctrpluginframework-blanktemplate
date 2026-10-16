@@ -62,7 +62,8 @@ namespace CTRPluginFramework
         // It has no guaranteed release API. We cease writing after one burst,
         // relying on normal HID refresh. Physical B or START requests abort.
         enum ControlPhase { DISARMED = 0, WAIT_CLOSE = 1,
-            COUNTDOWN = 2, PULSE = 3, FINISHED = 4, ABORTED = 5 };
+            COUNTDOWN = 2, PULSE = 3, FINISHED = 4, ABORTED = 5,
+            OBSERVE = 6 };
         const char *ControlName(ControlPhase phase)
         {
             switch (phase)
@@ -70,6 +71,7 @@ namespace CTRPluginFramework
                 case WAIT_CLOSE: return "WAIT_CLOSE";
                 case COUNTDOWN: return "COUNTDOWN";
                 case PULSE: return "PULSE";
+                case OBSERVE: return "OBSERVE";
                 case FINISHED: return "FINISHED";
                 case ABORTED: return "ABORTED";
                 default: return "DISARMED";
@@ -80,11 +82,19 @@ namespace CTRPluginFramework
         bool g_physicalAbortVerified = false;
         bool g_controlIsDryRun = true;
         u64 g_controlNextAt = 0, g_controlPulseStart = 0;
-        u64 g_controlLastCallbackAt = 0;
+        u64 g_controlLastCallbackAt = 0, g_controlObserveEndAt = 0;
         unsigned g_hidInjectionCalls = 0, g_controlAborts = 0;
+        unsigned g_pulseControlReads = 0;
+        unsigned g_manualAControlReads = 0, g_manualAMatchedReads = 0;
+        bool g_pulseMk7AccelerateSeen = false, g_pulseMovedSeen = false;
+        bool g_kdPadPauseKnown = false, g_kdPadPaused = false;
         const char *g_lastAbortReason = "None";
-        // Hard bounds: ~1.5s idle countdown, <=80ms injection and single-use.
-        constexpr u64 FIRST_CONTACT_COUNTDOWN_MS = 1500;
+        // Five seconds to return from CTRPF to MK7 and leave game pause.
+        // Last 800ms is a neutral-input guard; B aborts at any time.
+        constexpr u64 FIRST_CONTACT_COUNTDOWN_MS = 5000;
+        constexpr u64 FIRST_CONTACT_FINAL_GUARD_MS = 800;
+        constexpr u64 FIRST_CONTACT_NEUTRAL_AT_PULSE_MS = 300;
+        constexpr u64 FIRST_CONTACT_OBSERVE_MS = 1300;
         constexpr u64 FIRST_CONTACT_MAX_PULSE_MS = 80;
         constexpr u64 FIRST_CONTACT_MAX_GAP_MS = 250;
         // Selecting a CTRPF menu item uses A. Discard UI-held button state
@@ -212,6 +222,9 @@ namespace CTRPluginFramework
             bool vehicleControlsValid = false;
             u32 vehicleControls = 0;
             ControlPhase controlPhase = DISARMED;
+            unsigned pulseInputReads = 0, manualAConfirmed = 0;
+            bool pulseAccelSeen = false, pulseMoved = false;
+            bool padPauseKnown = false, padPaused = false;
         };
         Record g_records[MAX_LOG_SAMPLES];
         unsigned g_count = 0;
@@ -242,6 +255,12 @@ namespace CTRPluginFramework
             r.vehicleControlsValid = g_vehicleControlsValid;
             r.vehicleControls = g_vehicleControlsObserved;
             r.controlPhase = g_control;
+            r.pulseInputReads = g_pulseControlReads;
+            r.manualAConfirmed = g_manualAMatchedReads;
+            r.pulseAccelSeen = g_pulseMk7AccelerateSeen;
+            r.pulseMoved = g_pulseMovedSeen;
+            r.padPauseKnown = g_kdPadPauseKnown;
+            r.padPaused = g_kdPadPaused;
 
             r.value = g_observation;
             r.environment = g_environment;
@@ -427,7 +446,9 @@ namespace CTRPluginFramework
                 "profiler_callbacks,callback_gaps_over_50ms,"
                 "control_phase,hid_injection_calls,control_aborts,"
                 "mk7_controls_valid,mk7_controls_raw,"
-                "callback_work_us,probe_read_us,environment_read_us") == File::SUCCESS);
+                "callback_work_us,probe_read_us,environment_read_us,"
+                "pulse_control_read_count,pulse_accel_bit_seen,pulse_speed_change,"
+                "manual_a_control_matches,pad_pause_known,pad_pause_candidate") == File::SUCCESS);
 
             char line[1100];
             for (unsigned i = 0; saved && i < g_count; ++i)
@@ -442,7 +463,7 @@ namespace CTRPluginFramework
                     "%.4f,%.4f,%.4f,%.4f,%.4f,"
                     "%u,%u,%d,%u,%u,%u,%u,%lu,%lu,%lu,%lu,"
                     "%lu,%lu,%lu,%u,%u,%s,%u,%u,%d,0x%08lX,"
-                    "%lu,%lu,%lu",
+                    "%lu,%lu,%lu,%u,%d,%d,%u,%d,%d",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -487,7 +508,10 @@ namespace CTRPluginFramework
                     static_cast<unsigned long>(r.vehicleControls),
                     static_cast<unsigned long>(r.callbackWorkUs),
                     static_cast<unsigned long>(r.probeWorkUs),
-                    static_cast<unsigned long>(r.environmentReadUs));
+                    static_cast<unsigned long>(r.environmentReadUs),
+                    r.pulseInputReads, r.pulseAccelSeen ? 1 : 0,
+                    r.pulseMoved ? 1 : 0, r.manualAConfirmed,
+                    r.padPauseKnown ? 1 : 0, r.padPaused ? 1 : 0);
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -775,7 +799,7 @@ namespace CTRPluginFramework
         void AbortControl(const char *reason)
         {
             if (g_control == WAIT_CLOSE || g_control == COUNTDOWN ||
-                g_control == PULSE)
+                g_control == PULSE || g_control == OBSERVE)
             {
                 g_control = ABORTED;
                 g_lastAbortReason = reason;
@@ -786,6 +810,36 @@ namespace CTRPluginFramework
                 g_controlNextAt = 0;
                 g_controlPulseStart = 0;
                 g_controlWaitStartedAt = g_controlNeutralSince = 0;
+                g_controlObserveEndAt = 0;
+            }
+        }
+
+        // Read MK7's candidate VehicleControl::m_controls (bit0=accelerate)
+        // without changing game memory. A 2Hz screenshot may miss an 80ms key
+        // pulse, so poll once per callback while PULSE/OBSERVE is active.
+        void SampleGameControls(bool duringExperiment)
+        {
+            if (!g_vehicleAddress || !g_observation.candidate)
+                return;
+            u32 flags = 0;
+            if (!ReadWord(g_vehicleAddress + 0xFC, flags))
+                return;
+            g_vehicleControlsObserved = flags;
+            g_vehicleControlsValid = true;
+            if (Controller::IsKeyDown(Key::A) && !duringExperiment)
+            {
+                ++g_manualAControlReads;
+                if (flags & 1)
+                    ++g_manualAMatchedReads;
+            }
+            if (duringExperiment)
+            {
+                ++g_pulseControlReads;
+                if (flags & 1)
+                    g_pulseMk7AccelerateSeen = true;
+                if (g_observation.speedValid &&
+                    g_observation.speed > 0.35f)
+                    g_pulseMovedSeen = true;
             }
         }
 
@@ -811,7 +865,7 @@ namespace CTRPluginFramework
         void ControlStep(u64 now, bool menuOpen)
         {
             if (g_control != WAIT_CLOSE && g_control != COUNTDOWN &&
-                g_control != PULSE)
+                g_control != PULSE && g_control != OBSERVE)
                 return;
             if (menuOpen)
             {
@@ -877,8 +931,11 @@ namespace CTRPluginFramework
                 g_controlLastCallbackAt = now;
                 return;
             }
-            // A physical B or START press after the release interlock aborts.
-            if (UserAbortPressed())
+            // Physical B is the abort throughout countdown/pulse. START is
+            // deliberately permitted early in countdown to unpause MK7.
+            if (Controller::IsKeyDown(Key::B) ||
+                ((g_control == PULSE || g_control == OBSERVE) &&
+                 Controller::IsKeyDown(Key::Start)))
             {
                 AbortControl("B/START physical override");
                 return;
@@ -893,11 +950,23 @@ namespace CTRPluginFramework
             g_controlLastCallbackAt = now;
             if (g_control == COUNTDOWN)
             {
-                if (Controller::IsKeyDown(Key::A))
+                // During the early part of 5s, allow A/START to resume the
+                // game's own pause screen. Physical B always aborts.
+                const u64 remain = now < g_controlNextAt
+                    ? g_controlNextAt - now : 0;
+                if (remain <= FIRST_CONTACT_FINAL_GUARD_MS)
                 {
-                    AbortControl("A held during countdown");
-                    return;
+                    if (Controller::IsKeyDown(Key::A) ||
+                        Controller::IsKeyDown(Key::Start))
+                    {
+                        g_controlNeutralSince = 0;
+                    }
+                    else if (g_controlNeutralSince == 0)
+                        g_controlNeutralSince = now;
                 }
+                else
+                    g_controlNeutralSince = 0;
+
                 if (g_observation.speed > 0.35f ||
                     g_observation.speed < -0.35f)
                 {
@@ -906,6 +975,15 @@ namespace CTRPluginFramework
                 }
                 if (now >= g_controlNextAt)
                 {
+                    if (g_controlNeutralSince == 0 ||
+                        now - g_controlNeutralSince <
+                        FIRST_CONTACT_NEUTRAL_AT_PULSE_MS)
+                    {
+                        AbortControl("A/START not released before test");
+                        return;
+                    }
+                    // A candidate pause flag is *logged*, not trusted as a
+                    // universal game-paused detector until field-verified.
                     if (g_controlIsDryRun)
                     {
                         g_control = FINISHED;
@@ -915,28 +993,37 @@ namespace CTRPluginFramework
                     {
                         g_control = PULSE;
                         g_controlPulseStart = now;
+                        g_controlObserveEndAt = 0;
                     }
                 }
             }
             if (g_control == PULSE)
             {
-                // Single-use small A-key burst. This is NOT confirmed
-                // local MK7 control or confirmed release until hardware test.
+                SampleGameControls(true);
+                // Single-use short A-key burst; do not increase until game
+                // has demonstrated it receives AND releases this input.
                 if (now < g_controlPulseStart ||
                     now - g_controlPulseStart >= FIRST_CONTACT_MAX_PULSE_MS)
                 {
-                    g_control = FINISHED;
+                    g_control = OBSERVE;
+                    g_controlObserveEndAt = now + FIRST_CONTACT_OBSERVE_MS;
                     return;
                 }
                 Controller::InjectKey(static_cast<u32>(Key::A));
                 ++g_hidInjectionCalls;
+            }
+            if (g_control == OBSERVE)
+            {
+                SampleGameControls(true);
+                if (now >= g_controlObserveEndAt)
+                    g_control = FINISHED;
             }
         }
 
         void QueueControlExperiment(bool dryRun)
         {
             if (g_control == WAIT_CLOSE || g_control == COUNTDOWN ||
-                g_control == PULSE)
+                g_control == PULSE || g_control == OBSERVE)
             {
                 MessageBox("P006 experiment already queued",
                     "Finish or abort the current experiment first.")();
@@ -972,17 +1059,20 @@ namespace CTRPluginFramework
             g_controlNextAt = g_controlPulseStart = 0;
             g_controlLastCallbackAt = 0;
             g_controlWaitStartedAt = g_controlNeutralSince = 0;
+            g_controlObserveEndAt = 0;
+            g_pulseControlReads = 0;
+            g_pulseMk7AccelerateSeen = g_pulseMovedSeen = false;
             MessageBox(dryRun ? "P006 DRY RUN queued" :
                 "P006 REAL HID TEST queued",
                 dryRun
                 ? "Release A/B/START after closing the menu."
-                  " A neutral-input interlock runs before the 1.5s countdown."
-                  " No keys are injected. Then try a second dry run and press"
-                  " physical B during COUNTDOWN to test the abort."
+                  " A neutral-input interlock runs before the FIVE-SECOND countdown."
+                  " Resume MK7 using A/START in the first few seconds."
+                  " Release controls near zero; B aborts anytime."
                 : "CAUTION: this writes A into HID shared buffers briefly."
                   " Game acceptance and key release are UNVERIFIED."
-                  " Close menu, release buttons and wait for countdown."
-                  " Physical B/START can abort after COUNTDOWN starts."
+                  " Close menu, resume MK7 within FIVE seconds,"
+                  " then release A/START. Physical B aborts at any time."
                   " If controls stick, end MK7 and disable plugin.")();
         }
 
@@ -1030,6 +1120,10 @@ namespace CTRPluginFramework
                 "Physical abort verified: %s\n"
                 "Release interlock: %s\n"
                 "HID injection calls: %u\n"
+                "Pulse control reads: %u\n"
+                "Accel bit seen: %s  Speed: %s\n"
+                "Manual A matches: %u/%u\n"
+                "Pad paused?: %s\n"
                 "Abort count: %u\n"
                 "Last abort: %s\n"
                 "MK7 control bits: %s 0x%08lX",
@@ -1051,7 +1145,12 @@ namespace CTRPluginFramework
                 g_dryRunComplete ? "YES" : "NO",
                 g_physicalAbortVerified ? "YES" : "NO",
                 g_control == WAIT_CLOSE ? "WAITING" : "NOT WAITING",
-                g_hidInjectionCalls, g_controlAborts,
+                g_hidInjectionCalls, g_pulseControlReads,
+                g_pulseMk7AccelerateSeen ? "YES" : "NO",
+                g_pulseMovedSeen ? "MOVED" : "NO",
+                g_manualAMatchedReads, g_manualAControlReads,
+                g_kdPadPauseKnown ? (g_kdPadPaused ? "YES*" : "NO*") : "UNKNOWN",
+                g_controlAborts,
                 g_lastAbortReason, g_vehicleControlsValid ? "READ" : "N/A",
                 static_cast<unsigned long>(g_vehicleControlsObserved));
             MessageBox("P006 profiler and controls", msg)();
@@ -1092,7 +1191,8 @@ namespace CTRPluginFramework
             // Only ~2Hz full pointer walks; <=10Hz lightweight flag reads.
             if (!menuOpen && g_ready &&
                 (g_live || g_recording || g_control == WAIT_CLOSE ||
-                 g_control == COUNTDOWN || g_control == PULSE))
+                 g_control == COUNTDOWN || g_control == PULSE ||
+                 g_control == OBSERVE))
             {
                 const u64 now = osGetTime();
                 bool dueTelemetry = g_lastTelemetryAt == 0 ||
@@ -1112,6 +1212,22 @@ namespace CTRPluginFramework
                         ? static_cast<u32>(probeEnded - probeStarted) : 0;
                     g_vehicleControlsValid = g_vehicleAddress != 0 &&
                         ReadWord(g_vehicleAddress + 0xFC, g_vehicleControlsObserved);
+                    // KDPlayerPad::m_is_paused at +0x3D, candidate only.
+                    g_kdPadPauseKnown = false;
+                    g_kdPadPaused = false;
+                    u32 gamePad = 0;
+                    u8 gamePadPaused = 0;
+                    if (g_vehicleAddress != 0 &&
+                        ReadPointer(g_vehicleAddress + 0xE0, gamePad) &&
+                        Process::Read8(gamePad + 0x3D, gamePadPaused))
+                    {
+                        g_kdPadPauseKnown = true;
+                        g_kdPadPaused = gamePadPaused != 0;
+                    }
+                    // Compare physical A with MK7's own accelerate bit.
+                    if (g_control == DISARMED || g_control == FINISHED ||
+                        g_control == ABORTED)
+                        SampleGameControls(false);
                 }
                 if (g_lastEnvironmentAt == 0 ||
                     now < g_lastEnvironmentAt ||
@@ -1125,7 +1241,8 @@ namespace CTRPluginFramework
                     CaptureSample();
             }
             // A queued test cannot silently survive losing READY or menu reopen.
-            else if (g_control == COUNTDOWN || g_control == PULSE)
+            else if (g_control == COUNTDOWN || g_control == PULSE ||
+                     g_control == OBSERVE)
                 AbortControl(menuOpen ? "Menu reopened" : "READY/sensing disabled");
             if (g_live && g_ready)
             {
@@ -1170,10 +1287,19 @@ namespace CTRPluginFramework
             }
             // New control-authority indicator, without shifting P001's HUD.
             if (g_control == WAIT_CLOSE || g_control == COUNTDOWN ||
-                g_control == PULSE || g_control == ABORTED)
+                g_control == PULSE || g_control == OBSERVE ||
+                g_control == ABORTED)
             {
-                screen.DrawRect(160, 196, 157, 13, Color::Black, true);
-                screen.Draw(ControlName(g_control), 163, 197,
+                screen.DrawRect(142, 196, 178, 13, Color::Black, true);
+                char phase[42];
+                if (g_control == COUNTDOWN && g_controlNextAt > osGetTime())
+                    std::snprintf(phase, sizeof(phase), "RACCOON IN %lus",
+                        static_cast<unsigned long>(
+                            (g_controlNextAt - osGetTime() + 999) / 1000));
+                else
+                    std::snprintf(phase, sizeof(phase), "%s",
+                        ControlName(g_control));
+                screen.Draw(phase, 145, 197,
                     g_control == ABORTED ? Color::Yellow : Color::Green,
                     Color::Black);
             }
