@@ -1,59 +1,83 @@
-# Collie Kart Portable — P005 Sensor Fusion & Passive Evaluation
+# Collie Kart Portable — P006 First Contact
 
-**New P005 build: NOT YET TESTED on physical New 3DS. Back up working P004 first.**
+**EXPERIMENTAL / DEVELOPMENT BUILD. BACK UP WORKING P005 BEFORE TESTING.**
 
-## Why P005?
+P006 inherits P001's bottom-left HUD, P002's live telemetry, P003's manual SD flight recorder, P004's provisional rewards and driving modes, and P005's fused boost-panel detection and brake-linked diagnostics.
 
-On the actual New 3DS, P004 successfully recorded two glider deployments, one natural landing, one midair glider closure, and plausible progression rewards. It showed occasional mild slowdown without stutter or freezing.
+P006 adds **independent performance profiling** and a **gated single-use, local A-button injection experiment**. The real input test is unverified on the user's actual New 3DS. **It is not a learned or autonomous driver**, does not inject analog steering, and never writes MK7 process memory.
 
-One ordinary Toad Circuit boost pad was **missed by the P004 boost counter**:
-- P004 recorded a `dash_type=6` (`DASH_PANEL`) at ~27.8 seconds on lap 1.
-- `boost_flags` stayed `0x00000000` across the entire recording.
-- The old `boost_pad_activations` counter stayed at zero.
+## Important discovery: CTRPluginFramework's InjectKey
 
-The real evidence is in the user's P004 CSV (held privately by the user, not added to this public repository).
+In the framework source, `Controller::InjectKey(Key::A)` temporarily ORs the A-bit into **eight 3DS HID shared-memory buffers**. The API does **not** provide a confirmed release function and documentation says injection may fail depending on game timing. Therefore P006 does **not** provide repeated or sustained auto-driving controls. It only provides a **single 80ms maximum injection burst**, explicitly requested by the user after two dry-run checks. Afterward it stops injecting and relies on the HID subsystem to refresh the shared buffers. **Actual successful input and release MUST be tested on the console.** A freeze or lingering input is possible.
 
-## New systems
-
-1. **Dual-source boost detection.** Count a normal boost panel if either `boost_flags bit 0x2` rises **or** `dash_type` enters value `6`. Keep both counters, `dash_panel_edges` and `boost_flag_edges`, so we can audit the combined event count. Deduplicate overlapping detections using a **400 ms** cooldown. This is a working hypothesis and may combine two extremely close consecutive pads.
-2. **Lower-overhead sensor scheduling.** Full pointer/position/speed telemetry targets **500 ms** between reads (~2Hz); lightweight mode/boost/glider reads target **100 ms** (~10Hz). Both use elapsed time from `osGetTime()` rather than assuming MK7 renders at 60 FPS. Times are best-effort under frame drops or pauses; the recorder never promises exact sampling.
-3. **Raw evidence retained.** P003/P004 columns remain unchanged and in order, including raw status flags, boost flags, dash type, modes, candidate rewards, and all cumulative event counts. Additional diagnostic columns are appended.
-4. **Reward coefficients unchanged.** Forward newly attained maximum completion = `100 * delta`; time cost = `-0.1 * seconds` for intervals up to 3s; forward one-lap transition = `+20` if progress delta is plausible. No boost/glider points and **no brake-closure penalty yet**.
-5. **Passive brake correlation.** Sample CTRPF's read-only B-button state at the 100 ms environment interval. Log B-held status, times braking while gliding, and midair closure events with a B reading within the past 350 ms. These are only **suspected correlations**, not causal proof. No game input is modified.
-6. **Performance counters.** Add environment poll counts, read-failure counts, measured poll-to-poll gap, individual read duration and maximum read duration, plus actual CSV-sample gap. This lets us assess slowdown quantitatively.
-7. **Prevent menu miscounts.** Environment snapshots taken while CTRPF's pause/menu is open update the visible values without crediting pad events, mode time, or glider closures. Toggling the live overlay while recording no longer discards a cached state.
-
-## What P005 does NOT do
-
-No driving controls, button injection, machine learning, active-race verification, or automatic saving. `Stop & Save CSV` is still the only writer and only touches the `SD:/CollieKart/` directory. Values and flag meanings are based on [mk7re/MK7-Memory](https://github.com/mk7re/MK7-Memory/blob/master/template/Kart/Vehicle/VehicleMove.hpp) and [mk7re/MK7-Emu-Scripts](https://github.com/mk7re/MK7-Emu-Scripts); new interpretations require field tests.
+There is no independent hardware watchdog: a game/plugin freeze can prevent the callback from releasing or responding. Physical B/START aborts are checked only while callbacks run. If something malfunctions, restart MK7, turn off 3GX Plugin Loader, and restore P005. **Never assume a software deadman switch can recover a completely frozen plugin.**
 
 ## Installation
 
-1. Back up the **working P004 CollieKart.3gx** elsewhere (iPhone Files is fine).
-2. Download the successful **Collie-Kart-P005-3GX** GitHub Actions artifact; extract the `.3gx` and rename it to `CollieKart.3gx`.
-3. Power off New 3DS before removing the microSD; replace `SD:/luma/plugins/0004000000030800/CollieKart.3gx`.
-4. Boot MK7 USA, enable the 3GX Plugin Loader if needed; expect `CK P005 | INACTIVE` in the same approved bottom-left location.
+- Back up your currently working `SD:/luma/plugins/0004000000030800/CollieKart.3gx` (P005) to a safe place on your iPhone.
+- After GitHub Actions has compiled successfully, download `Collie-Kart-P006-3GX`. Extract and rename `CTRPluginFramework-BlankTemplate.3gx` to `CollieKart.3gx`.
+- Power off your New 3DS and replace the plugin under `SD:/luma/plugins/0004000000030800/` (confirmed USA MK7 title).
+- Check that the bottom-left indicator reads `CK P006 | INACTIVE`. The P001 HUD anchor has not moved.
 
-## Field-test plan
+## Test A — performance only (NO injected inputs)
 
-Record separate **30–90 second solo Time Trials**, each with READY enabled. Choose `Start recording`, drive, then use `Stop & Save CSV`. Copies are numbered `SD:/CollieKart/session_NNN.csv`; no previous files are intentionally overwritten.
+P006 begins entirely disarmed. **Do this first.**
 
-1. **Baseline and performance:** Toad Circuit ordinary driving with optional live HUD. Check for slowdown, freezing, video issues. Observe the environment poll count, read failures, measured gap, and max read time. Check that CSV `sample_gap_ms` is closer to 500ms than P004's ~1.26s.
-2. **Normal boost pad on lap 1:** cross the same pad. Expect `dash_panel_edges` > 0 and fused `boost_pad_activations` > 0; raw `boost_flag_edges` may remain zero. No double counting from repeated snapshots.
-3. **Normal Toad Circuit glider flight:** hit the blue glide pad, glide, land. Confirm glider-pad activation and natural closure.
-4. **Controlled early glider close:** activate glide pad, then press B to brake once while airborne. Check `brake_held`, `brake_while_gliding_polls`, and `brake_linked_midair_closures` alongside the older `midair_glider_closures`. Lack of a linked event doesn't prove no braking—100ms polling can miss brief inputs.
-5. **Normal ramp without a glide pad:** ensure the ordinary airborne state isn't classified as GLIDING.
-6. **Underwater later:** test a course such as Cheep Cheep Lagoon for the `UNDERWATER` state and duration.
+1. Enter Toad Circuit Time Trial, activate READY, then enable **Toggle performance profiler**. Leave recording and live telemetry OFF and drive part of a lap; open **Profiler & control diagnostics** and note callback counts and max gaps.
+2. Toggle live telemetry ON and drive the same section. Compare callback counts / gaps and perceived FPS.
+3. Repeat with **Start recording**, then **Stop & Save CSV**. P006 appends profiler and control columns to the same incrementing `SD:/CollieKart/session_NNN.csv` format.
+4. Send the CSV and say **where** whole-game slowdown occurred (e.g. checkpoint or nearby track landmark) in each mode. The callback cadence is a **proxy** and does not directly measure actual MK7 simulation FPS.
 
-Please send the CSV files (and any useful diagnostics screenshots) and mention any unexpected frame-rate changes.
+All ordinary P005 features should still function. If anything freezes or acts suspicious, restore P005 and skip all input experiments.
 
-## CSV format additions
+## Test B — SAFETY dry run (NO injected inputs)
 
-P005 *appends* these columns after all P004 fields:
-`dash_panel_edges,boost_flag_edges,brake_held,brake_while_gliding_polls,brake_linked_midair_closures,environment_polls,environment_read_failures,environment_poll_gap_ms,environment_read_ms,environment_max_read_ms,sample_gap_ms`.
+1. Stay on **Toad Circuit Time Trial**, on level ground, stopped, with READY ON and candidate telemetry valid.
+2. Choose **Queue DRY RUN (no input)**, close the plugin menu, and wait ~1.5 seconds. The plugin should finish without moving the kart. This unlocks the first dry-run criterion.
+3. Queue **ANOTHER** dry run, close the menu, and immediately press **physical B** before 1.5 seconds elapse. Check **Profiler & control diagnostics**. It should report `ABORTED` with `B/START physical override`, and `Physical abort verified: YES`.
+4. The real experiment stays locked until **both** a successful dry run AND a physical-abort dry run are observed within this game session. The lock resets when the game/plugin restarts.
 
-CSV rewards remain passive experimental scores, **not training results**. As before, 1,800 rows fit in the in-memory buffer. Unknown modes are recorded without inventing certainty. If the plugin crashes, restore P004; CSVs remain on SD.
+**Warning:** Mario Kart uses B for brake/reverse; press it only when stationary in the dry-run test. CTRPF menu opening also cancels a queued or active test.
 
-## Limits
+## Test C — optional single real A-key experiment
 
-At 10Hz, a very short boost/brake pulse may still be missed. We can increase the polling rate only if hardware measurements justify it. Mode classification, B-button state, and glider closure causality need validation; don't automatically punish glider closure yet. The current running environment is not a visual road-perception system.
+**Only after Tests A and B pass and the 3DS behaves normally. This test is fully opt-in.**
+
+1. Use Time Trial, stationary and grounded; keep the physical A button released.
+2. Choose `Queue REAL A pulse (EXPERIMENT)` from CTRPF and close the menu.
+3. After the countdown, the plugin requests a **single short HID A-key burst** (at most 80 ms), then ceases all injections. You can press physical B or START during countdown/pulse to abort if callbacks continue.
+4. Check whether the kart begins accelerating and, most importantly, **whether it stops accelerating after the pulse**. Record the outcome even if no movement happens.
+5. Use `Profiler & control diagnostics` to inspect `HID injection calls`, `Control phase`, and `MK7 control bits`. If it does not release naturally, stop the game and disable Plugin Loader; do not repeat.
+6. Even if it works, **P006 is not approved for longer driving or steering**. Hardware release, timing, performance, and independent recovery remain open issues.
+
+The real experiment can be queued again only by explicitly selecting it anew. There is no self-arming or automatic repetition, and no learning algorithm.
+
+## New logging fields
+
+These columns are appended after the P005 CSV fields:
+
+`callback_gap_ms,callback_work_ms,probe_read_ms,profiler_callbacks,callback_gaps_over_50ms,control_phase,hid_injection_calls,control_aborts,mk7_controls_valid,mk7_controls_raw`
+
+- `callback_gap_ms` — gap between plugin bottom-screen OSD callbacks in milliseconds when profiler is enabled and menu closed. **Not guaranteed game FPS.**
+- `callback_work_ms` — duration of our OSD callback including HUD drawing, rounded to 1ms resolution.
+- `probe_read_ms` — time spent executing a complete MK7 telemetry Probe (not game frame duration).
+- `profiler_callbacks`, `callback_gaps_over_50ms` — cumulative diagnostic counts since the profiler toggle.
+- `control_phase` — DISARMED, WAIT_CLOSE, COUNTDOWN, PULSE, FINISHED, ABORTED.
+- `hid_injection_calls` — number of explicit `Controller::InjectKey(A)` calls, **not proof of MK7 accepting the input**.
+- `control_aborts` — number of software aborts.
+- `mk7_controls_valid`, `mk7_controls_raw` — read-only candidate `VehicleControl::m_controls` at vehicle + `0xFC`, for cross-checking injection. Based on [mk7re/MK7-Memory](https://github.com/mk7re/MK7-Memory/blob/master/template/Kart/Vehicle/VehicleControl.hpp); hardware behavior unknown.
+
+The existing P005 reward weights and all original CSV columns are unchanged.
+
+## Hard limits and caveats
+
+- Real injection only after a dry run + physical B/START abort has passed.
+- User must be READY and on MK7 USA, with valid stationary grounded telemetry.
+- 1.5s countdown; 80ms **maximum request duration**; callbacks with a gap over 250ms abort.
+- B or START triggers abort if detected; reopening CTRPF menu also aborts; READY OFF aborts.
+- The plugin stops requesting injections after the pulse. **It cannot currently guarantee clearing the shared HID buffers or overriding a frozen callback.**
+- The first pulse intentionally has very short duration, and therefore **may not be noticed by the game**; that is a diagnostic result, not a failure to be hidden.
+- Pulse event logs require recording to be enabled separately; the profiler and on-screen diagnostic counters operate independently of recording.
+- No new control pathways are active by default. No MK7 game-memory writes, no automated steering, no model training.
+
+P006 remains a **draft** until physical profiling and input-release tests are complete.
