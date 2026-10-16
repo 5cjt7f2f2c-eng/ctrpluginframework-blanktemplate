@@ -1,10 +1,10 @@
-name: Collie Kart P001 Build
+name: Collie Kart P002 Build
 
 on:
   push:
-    branches: [master, collie-kart-p001]
+    branches: [master, collie-kart-p001, collie-kart-p002-telemetry-probe]
   pull_request:
-    branches: [master]
+    branches: [master, collie-kart-p001]
   workflow_dispatch:
 
 jobs:
@@ -15,17 +15,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build P001
+      - name: Build P002
         run: make
       - name: Upload plugin 3GX
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P001-3GX
+          name: Collie-Kart-P002-3GX
           path: CTRPluginFramework-BlankTemplate.3gx
           if-no-files-found: error
       - name: Upload debug ELF
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P001-ELF
+          name: Collie-Kart-P002-ELF
           path: CTRPluginFramework-BlankTemplate.elf
           if-no-files-found: error
