@@ -56,10 +56,11 @@ The real experiment can be queued again only by explicitly selecting it anew. Th
 
 These columns are appended after the P005 CSV fields:
 
-`callback_gap_ms,callback_work_ms,probe_read_ms,profiler_callbacks,callback_gaps_over_50ms,control_phase,hid_injection_calls,control_aborts,mk7_controls_valid,mk7_controls_raw`
+`callback_gap_ms,callback_work_ms,probe_read_ms,profiler_callbacks,callback_gaps_over_50ms,control_phase,hid_injection_calls,control_aborts,mk7_controls_valid,mk7_controls_raw,callback_work_us,probe_read_us,environment_read_us`
 
 - `callback_gap_ms` — gap between plugin bottom-screen OSD callbacks in milliseconds when profiler is enabled and menu closed. **Not guaranteed game FPS.**
 - `callback_work_ms` — duration of our OSD callback including HUD drawing, rounded to 1ms resolution.
+- `callback_work_us`, `probe_read_us`, `environment_read_us` — higher-resolution measurements (microseconds) from the system tick counter, helpful when reads are shorter than 1 ms.
 - `probe_read_ms` — time spent executing a complete MK7 telemetry Probe (not game frame duration).
 - `profiler_callbacks`, `callback_gaps_over_50ms` — cumulative diagnostic counts since the profiler toggle.
 - `control_phase` — DISARMED, WAIT_CLOSE, COUNTDOWN, PULSE, FINISHED, ABORTED.
@@ -73,7 +74,7 @@ The existing P005 reward weights and all original CSV columns are unchanged.
 
 - Real injection only after a dry run + physical B/START abort has passed.
 - User must be READY and on MK7 USA, with valid stationary grounded telemetry.
-- 1.5s countdown; 80ms **maximum request duration**; callbacks with a gap over 250ms abort.
+- 1.5s countdown; 80ms **maximum request duration**; callbacks with a gap over 250ms abort. Holding physical A during the countdown also aborts.
 - B or START triggers abort if detected; reopening CTRPF menu also aborts; READY OFF aborts.
 - The plugin stops requesting injections after the pulse. **It cannot currently guarantee clearing the shared HID buffers or overriding a frozen callback.**
 - The first pulse intentionally has very short duration, and therefore **may not be noticed by the game**; that is a diagnostic result, not a failure to be hidden.
