@@ -1,4 +1,5 @@
-// Collie Kart Portable P006.1 -- read-only KDPad input pipeline examination.
+// Collie Kart Portable P006.2 -- read-only native setter preflight.
+// No native writes: validates KDPad add-in chain before an actual actuator test.
 // No writes to MK7 process memory or autonomous steering / machine learning.
 // One opt-in HID InjectKey(A) experiment after a full dry-run; release not yet
 // hardware-verified, so each experiment is isolated and deliberately short.
@@ -118,6 +119,31 @@ namespace CTRPluginFramework
         PadTrace g_padTrace;
         unsigned g_padPolls = 0, g_padFails = 0, g_padPhysicalA = 0;
         unsigned g_padAMatches = 0, g_vehicleAMatches = 0, g_allAMatches = 0;
+        bool g_setterTrace = false;
+        u64 g_lastSetterPollAt = 0;
+        unsigned g_setterPolls = 0, g_setterFailures = 0;
+        unsigned g_setterStructuralMatches = 0;
+        unsigned g_setterAActivePolls = 0, g_setterAInactivePolls = 0;
+        // A chain node is NOT identified as KDPadSetter simply because its
+        // memory resembles this layout. It remains a *candidate*.
+        struct SetterNode
+        {
+            bool valid = false;
+            u32 address = 0, previous = 0, backPad = 0, onFramePtr = 0;
+            u32 candidateButtons = 0;
+            float candidateStickX = 0.0f;
+            u8 disableFlag = 255, updateFlag = 255;
+        };
+        struct SetterPreflight
+        {
+            bool chainValid = false;
+            bool playerPadValid = false;
+            u32 playerPad = 0, activeAddin = 0, addinMask = 0;
+            unsigned chainLength = 0, plausibleSetterNodes = 0;
+            SetterNode nodes[4];
+        };
+        SetterPreflight g_setter;
+
 
         struct Observation
         {
@@ -241,6 +267,8 @@ namespace CTRPluginFramework
             PadTrace padTrace;
             unsigned padPolls = 0, padFails = 0, padPhysicalA = 0;
             unsigned padAMatches = 0, vehicleAMatches = 0, allAMatches = 0;
+            SetterPreflight setter;
+            unsigned setterPolls = 0, setterFailures = 0, setterMatches = 0;
         };
         Record g_records[MAX_LOG_SAMPLES];
         unsigned g_count = 0;
@@ -284,6 +312,10 @@ namespace CTRPluginFramework
             r.padAMatches = g_padAMatches;
             r.vehicleAMatches = g_vehicleAMatches;
             r.allAMatches = g_allAMatches;
+            r.setter = g_setter;
+            r.setterPolls = g_setterPolls;
+            r.setterFailures = g_setterFailures;
+            r.setterMatches = g_setterStructuralMatches;
 
             r.value = g_observation;
             r.environment = g_environment;
@@ -475,9 +507,16 @@ namespace CTRPluginFramework
                 "trace_valid,physical_a,kd_buttons_stick,kd_raw_buttons,kd_addin,"
                 "kd_type,kd_paused,vehicle_controls,vehicle_steer_x,"
                 "pad_polls,pad_fails,physical_a_polls,kd_a_matches,"
-                "vehicle_a_matches,full_chain_matches") == File::SUCCESS);
+                "vehicle_a_matches,full_chain_matches,"
+                "setter_read_valid,setter_chain_valid,setter_mask,"
+                "setter_chain_length,setter_candidates,"
+                "setter_node0_addr,setter_node0_buttons,setter_node0_update,"
+                "setter_node1_addr,setter_node1_buttons,setter_node1_update,"
+                "setter_node2_addr,setter_node2_buttons,setter_node2_update,"
+                "setter_node3_addr,setter_node3_buttons,setter_node3_update,"
+                "setter_polls,setter_failures,setter_structural_matches") == File::SUCCESS);
 
-            char line[1500];
+            char line[2100];
             for (unsigned i = 0; saved && i < g_count; ++i)
             {
                 const Record &r = g_records[i];
@@ -492,7 +531,13 @@ namespace CTRPluginFramework
                     "%lu,%lu,%lu,%u,%u,%s,%u,%u,%d,0x%08lX,"
                     "%lu,%lu,%lu,%u,%d,%d,%u,%d,%d,"
                     "%d,%d,0x%08lX,0x%08lX,0x%08lX,%u,%u,0x%08lX,%.3f,"
-                    "%u,%u,%u,%u,%u,%u",
+                    "%u,%u,%u,%u,%u,%u,"
+                    "%d,%d,0x%08lX,%u,%u,"
+                    "0x%08lX,0x%08lX,%u,"
+                    "0x%08lX,0x%08lX,%u,"
+                    "0x%08lX,0x%08lX,%u,"
+                    "0x%08lX,0x%08lX,%u,"
+                    "%u,%u,%u",
                     static_cast<unsigned long>(r.elapsedMs),
                     v.candidate ? 1 : 0,
                     v.candidate ? v.lap : 0,
@@ -550,7 +595,24 @@ namespace CTRPluginFramework
                     static_cast<unsigned long>(r.padTrace.vehicleControls),
                     r.padTrace.steer,
                     r.padPolls, r.padFails, r.padPhysicalA,
-                    r.padAMatches, r.vehicleAMatches, r.allAMatches);
+                    r.padAMatches, r.vehicleAMatches, r.allAMatches,
+                    r.setter.playerPadValid ? 1 : 0,
+                    r.setter.chainValid ? 1 : 0,
+                    static_cast<unsigned long>(r.setter.addinMask),
+                    r.setter.chainLength, r.setter.plausibleSetterNodes,
+                    static_cast<unsigned long>(r.setter.nodes[0].address),
+                    static_cast<unsigned long>(r.setter.nodes[0].candidateButtons),
+                    static_cast<unsigned>(r.setter.nodes[0].updateFlag),
+                    static_cast<unsigned long>(r.setter.nodes[1].address),
+                    static_cast<unsigned long>(r.setter.nodes[1].candidateButtons),
+                    static_cast<unsigned>(r.setter.nodes[1].updateFlag),
+                    static_cast<unsigned long>(r.setter.nodes[2].address),
+                    static_cast<unsigned long>(r.setter.nodes[2].candidateButtons),
+                    static_cast<unsigned>(r.setter.nodes[2].updateFlag),
+                    static_cast<unsigned long>(r.setter.nodes[3].address),
+                    static_cast<unsigned long>(r.setter.nodes[3].candidateButtons),
+                    static_cast<unsigned>(r.setter.nodes[3].updateFlag),
+                    r.setterPolls, r.setterFailures, r.setterMatches);
                 if (length <= 0 || length >= static_cast<int>(sizeof(line)) ||
                     csv.WriteLine(line) != File::SUCCESS)
                     saved = false;
@@ -639,6 +701,107 @@ namespace CTRPluginFramework
                     (t.vehicleControls & 1))
                     ++g_allAMatches;
             }
+        }
+
+
+        // mk7re/MK7-Memory/System/KDPad{,AddBase,Setter}.hpp:
+        // KDPad +0x14 active addin pointer; active->previous at +0x0C;
+        // common addin base holds m_data_on_frame(+0x1C) / m_pad(+0x20).
+        // Stop traversal at 4 nodes and reject mismatched backlinks/cycles.
+        // Setter-specific fields are *hypotheses*: buttons +0x24,
+        // stick x +0x28, disable flag +0x30 and update flag +0x3C.
+        // Never write or assume a matching node is definitively setter.
+        void ReadNativeSetterPreflight()
+        {
+            ++g_setterPolls;
+            SetterPreflight out;
+            u32 pad = 0, active = 0, mask = 0;
+            if (!g_vehicleAddress || !g_observation.candidate ||
+                !ReadPointer(g_vehicleAddress + 0xE0, pad) ||
+                !ReadWord(pad + 0x18, mask))
+            {
+                g_setter = out;
+                ++g_setterFailures;
+                return;
+            }
+
+            out.playerPad = pad;
+            out.playerPadValid = true;
+            out.addinMask = mask;
+            if (!ReadPointer(pad + 0x14, active))
+            {
+                g_setter = out;
+                ++g_setterFailures;
+                return;
+            }
+            out.activeAddin = active;
+            u32 ptr = active;
+            bool structurallyValid = true;
+            for (unsigned i = 0; i < 4 && ptr; ++i)
+            {
+                SetterNode &node = out.nodes[i];
+                u32 backlink = 0, framePtr = 0, prev = 0;
+                // Validate each pointer and two independent backlinks.
+                if (!PlausibleAddress(ptr) ||
+                    !ReadWord(ptr + 0x20, backlink) ||
+                    !ReadWord(ptr + 0x1C, framePtr) ||
+                    !ReadWord(ptr + 0x0C, prev) ||
+                    backlink != pad || framePtr != pad + 0x1C)
+                {
+                    structurallyValid = false;
+                    break;
+                }
+                node.address = ptr;
+                node.previous = prev;
+                node.backPad = backlink;
+                node.onFramePtr = framePtr;
+                node.valid = true;
+                out.chainLength = i + 1;
+
+                // Raw candidate setter readings, not safe for injection yet.
+                u32 buttons = 0;
+                float stick = 0;
+                u8 disable = 255, update = 255;
+                if (ReadWord(ptr + 0x24, buttons) &&
+                    ReadNumber(ptr + 0x28, stick) &&
+                    Process::Read8(ptr + 0x30, disable) &&
+                    Process::Read8(ptr + 0x3C, update))
+                {
+                    node.candidateButtons = buttons;
+                    node.candidateStickX = stick;
+                    node.disableFlag = disable;
+                    node.updateFlag = update;
+                    if (buttons <= 0xFFFF && std::fabs(stick) <= 1.5f &&
+                        disable <= 1 && update <= 1)
+                        ++out.plausibleSetterNodes;
+                }
+
+                if (prev == 0)
+                {
+                    ptr = 0;
+                    break;
+                }
+                // Cycles would make the next-node lookup unsafe.
+                for (unsigned j = 0; j <= i; ++j)
+                    if (out.nodes[j].address == prev)
+                        structurallyValid = false;
+                if (!structurallyValid)
+                    break;
+                ptr = prev;
+            }
+            if (ptr != 0)
+                structurallyValid = false; // chain too long or broken
+            out.chainValid = structurallyValid && out.chainLength > 0;
+            g_setter = out;
+            if (out.chainValid && (out.addinMask & 0x10))
+                ++g_setterStructuralMatches;
+            else
+                ++g_setterFailures;
+
+            if (Controller::IsKeyDown(Key::A))
+                ++g_setterAActivePolls;
+            else
+                ++g_setterAInactivePolls;
         }
 
         void Probe()
@@ -1267,7 +1430,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P006.1 | READY" : "CK P006.1 | INACTIVE",
+            screen.Draw(g_ready ? "CK P006.2 | READY" : "CK P006.2 | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -1275,7 +1438,8 @@ namespace CTRPluginFramework
             if (!menuOpen && g_ready &&
                 (g_live || g_recording || g_control == WAIT_CLOSE ||
                  g_control == COUNTDOWN || g_control == PULSE ||
-                 g_control == OBSERVE || g_traceInput))
+                 g_control == OBSERVE || g_traceInput ||
+                 g_setterTrace))
             {
                 const u64 now = osGetTime();
                 bool dueTelemetry = g_lastTelemetryAt == 0 ||
@@ -1325,6 +1489,13 @@ namespace CTRPluginFramework
                 {
                     g_lastInputTraceAt = now;
                     SampleKDPadReadOnly();
+                }
+                if (g_setterTrace && (g_lastSetterPollAt == 0 ||
+                    now < g_lastSetterPollAt ||
+                    now - g_lastSetterPollAt >= 200))
+                {
+                    g_lastSetterPollAt = now;
+                    ReadNativeSetterPreflight();
                 }
                 ControlStep(osGetTime(), false);
                 if (g_recording && dueTelemetry)
@@ -1537,6 +1708,69 @@ namespace CTRPluginFramework
             MessageBox("P006.1 input pipeline", msg)();
         }
 
+
+        void ToggleSetterPreflight(MenuEntry *)
+        {
+            g_setterTrace = !g_setterTrace;
+            g_lastSetterPollAt = 0;
+            if (g_setterTrace)
+            {
+                g_setter = SetterPreflight();
+                g_setterPolls = g_setterFailures = 0;
+                g_setterStructuralMatches = 0;
+                g_setterAActivePolls = g_setterAInactivePolls = 0;
+            }
+            MessageBox("P006.2 native setter preflight",
+                g_setterTrace
+                ? "ON, read-only 5Hz. Drive with physical A and steering."
+                  " Then inspect the native setter diagnostic."
+                  " NO artificial controls are enabled."
+                : "OFF; no native game-memory writes were made.")();
+        }
+
+        void ShowSetterPreflight(MenuEntry *)
+        {
+            // A fresh snapshot while the menu is paused can help distinguish
+            // the pointer chain from motion-specific changes.
+            Probe();
+            ReadNativeSetterPreflight();
+            char msg[820];
+            std::snprintf(msg, sizeof(msg),
+                "Mode: READ ONLY / NATIVE DISABLED\n"
+                "Player pad valid: %s\n"
+                "Linked chain valid: %s\n"
+                "Addon mask: 0x%08lX\n"
+                "Chain nodes: %u (candidate: %u)\n"
+                "Polls/fails: %u/%u\n"
+                "Stable mask/chain samples: %u\n"
+                "A held/released: %u/%u\n"
+                "Node 0: 0x%08lX btn 0x%08lX upd %u\n"
+                "Node 1: 0x%08lX btn 0x%08lX upd %u\n"
+                "Node 2: 0x%08lX btn 0x%08lX upd %u\n"
+                "Node 3: 0x%08lX btn 0x%08lX upd %u\n"
+                "Actuation: NOT IMPLEMENTED",
+                g_setter.playerPadValid ? "YES" : "NO",
+                g_setter.chainValid ? "YES" : "NO",
+                static_cast<unsigned long>(g_setter.addinMask),
+                g_setter.chainLength, g_setter.plausibleSetterNodes,
+                g_setterPolls, g_setterFailures,
+                g_setterStructuralMatches,
+                g_setterAActivePolls, g_setterAInactivePolls,
+                static_cast<unsigned long>(g_setter.nodes[0].address),
+                static_cast<unsigned long>(g_setter.nodes[0].candidateButtons),
+                static_cast<unsigned>(g_setter.nodes[0].updateFlag),
+                static_cast<unsigned long>(g_setter.nodes[1].address),
+                static_cast<unsigned long>(g_setter.nodes[1].candidateButtons),
+                static_cast<unsigned>(g_setter.nodes[1].updateFlag),
+                static_cast<unsigned long>(g_setter.nodes[2].address),
+                static_cast<unsigned long>(g_setter.nodes[2].candidateButtons),
+                static_cast<unsigned>(g_setter.nodes[2].updateFlag),
+                static_cast<unsigned long>(g_setter.nodes[3].address),
+                static_cast<unsigned long>(g_setter.nodes[3].candidateButtons),
+                static_cast<unsigned>(g_setter.nodes[3].updateFlag));
+            MessageBox("P006.2 Setter Discovery", msg)();
+        }
+
         void ShowEnvironment(MenuEntry *)
         {
             // Menu is paused: attempt a fresh, read-only snapshot first.
@@ -1599,9 +1833,9 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P006.1", 0, 0, 7,
-            "Read-only native input pipeline trace.\n"
-            "No controller injection option exposed in this build.");
+        PluginMenu menu("Collie Kart P006.2", 0, 0, 8,
+            "Native controller setter PRE-FLIGHT. Read only.\n"
+            "No controller injection or game RAM writes.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
@@ -1618,6 +1852,14 @@ namespace CTRPluginFramework
             "Sample MK7 player KDPad and vehicle controls without writing memory.");
         menu += new MenuEntry("Input pipeline diagnostics", nullptr, InputTraceDiagnostics,
             "Check physical A, KDPad A and vehicle acceleration matches.");
+        menu += new MenuEntry("Toggle NATIVE setter preflight", nullptr, ToggleSetterPreflight,
+            "Read-only inspect the MK7 pad subsystem chain at up to 5Hz.");
+        menu += new MenuEntry("Native setter diagnostics", nullptr, ShowSetterPreflight,
+            "Check pad add-in chain validity and candidate native setter state.");
+        menu += new MenuEntry("Queue 5s SAFETY dry run", nullptr, QueueDryRun,
+            "Countdown and B/START abort, no artificial input or game-memory writes.");
+        menu += new MenuEntry("ABORT safety dry run", nullptr, CancelControl,
+            "Abort the countdown; physical B also aborts.");
         menu += new MenuEntry("Start recording", nullptr, StartRecording,
             "Begin buffering telemetry in RAM. Requires READY.");
         menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,

@@ -3,24 +3,23 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 7
+    Revision: 8
 
 Targets:
 
-Title: Collie Kart Portable P006.1
+Title: Collie Kart Portable P006.2
 
-Summary: MK7 read-only player-pad and vehicle-input tracing
+Summary: MK7 read-only KDPadSetter chain discovery and 5s safety rehearsal
 
 Description: |
-    P006.1 preserves passive MK7 telemetry and user-triggered CSV logging.
-    Opt-in performance diagnostics track frame callback cadence and
-    read durations; a dry-run-gated single-use HID InjectKey(A)
-    experiment remains included but its use is NOT recommended in this probe.
-    Adds opt-in read-only KDPad and VehicleControl tracing.
-    Manual B/START abort, telemetry watchdog and short expiry
-    prevent repeated injection attempts. No autonomous navigation,
-    reinforcement learning, or game RAM modifications.
-    Input release relies on platform HID refresh and is NOT proven.
+    P006.2 prepares for local, supervised native input control.
+    This preflight inspects the MK7 player-pad add-in chain
+    and candidate KDPadSetter fields without writing memory.
+    It retains P006.1 controller tracing, passive telemetry,
+    CSV flight recorder, and the five-second dry-run/abort test.
+    HID injection is disabled and no MK7 actuator is enabled.
+    Native press and release must be designed after hardware
+    calibration; this version cannot drive autonomously.
 
 Compatibility: Any
 
