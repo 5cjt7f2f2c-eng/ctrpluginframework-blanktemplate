@@ -1,35 +1,40 @@
-# Collie Kart P006.3b — guarded native A first-contact
+# Collie Kart P006.4 — Four-Control Hardware Validation
 
-**BUILD MILESTONE ONLY UNTIL HARDWARE VERIFIED.** The P006.3a pass-through hook already passed New 3DS Mario Kart 7 USA revision 2 testing (522 player frames, 178 physical A frames, no read failures, normal driving and READY-off behavior). **The P006.3b artificial A write is NEW and untested.**
+**UNTESTED on hardware. NOT a learning AI.** Based on the successful P006.3b: three synthetic A frames, brief movement, 12 natural-input release frames, zero read/write failures, controls restored. Preserve that branch and compiled plugin.
 
-## Safety changes
-- Original `KDPadInputer::calcInput` always executes first, preserving physical controls when the one-shot is not armed.
-- One-shot synthetic A may affect **at most three game-frame inputs**, with an independent **350 ms** expiry and no steering, HID or other button changes.
-- The input hook observes physical A/B/START; real B/START take priority. Holding physical A instead of the synthetic test cancels the substitution.
-- A checked `Process::Write16` performs the only in-frame mutation. Original MK7 processing refreshes physical data on subsequent calls. Cancel cannot reverse an already in-flight write.
-- `std::atomic` and compare-exchange distinguish OFF, ARMED, DONE, ABORT and WRITING, reducing late-write races.
-- Requires 30 native player frames, 10 physical A frames, zero read/write errors, a completed 5-second dry run, and a **separate physical B abort rehearsal**. Cannot attempt artificial input more than **once per MK7 process session**.
-- Turning READY off disarms the experiment and attempts to uninstall the hook; errors require quitting the title.
-- P006.3a and P006.2 remain untouched as backups.
+## Test matrix
+| Menu | Action | Native inputs | Max game-frame callbacks | Deadline |
+| --- | --- | --- | ---: | ---: |
+| 4 | Throttle | A | 18 | 700 ms |
+| 5 | Steer left | A + stick X=2 (center=7) | 36 | 1100 ms |
+| 6 | Steer right | A + stick X=12 (center=7) | 36 | 1100 ms |
+| 7 | Reverse | B, stick unchanged | 90 | 2300 ms |
 
-## Mandatory first hardware session — rehearsals only
-1. Save both known-good P006.3a and P006.2 `.3gx` backups on your iPhone/SD card. Fully power off 3DS before replacing the installed plugin with P006.3b.
-2. Start **OFFLINE Toad Circuit Time Trial only** (the build cannot independently verify Time Trial/online status). Check `CK P006.3b | INACTIVE`, then select READY.
-3. Choose **1: Install PASS-THROUGH hook**; drive manually with A, steering, B. Confirm the kart drives normally as in P006.3a.
-4. Open **2: Native hook diagnostics**. Require Hook installed YES, exactly 1 signature match, at least 30 player input frames and 10 physical-A frames, and zero read/write failures. Otherwise stop.
-5. Park on a flat, grounded road. Select **3: Queue 5s SAFETY dry run**. Close CTRPF; unpause MK7 early with A/START, then release controls well before the end. Wait for FINISHED. No artificial input occurs.
-6. Repeat **3: Queue 5s SAFETY dry run**, and press physical B during countdown to abort it. Diagnostics should report **Dry-run/physical B: YES/YES**.
-7. **STOP HERE AND SEND A DIAGNOSTIC PHOTO.** Do not run experimental menu option 4 until the rehearsals are reviewed. This separates safety validation from first write.
+At 60 FPS these correspond to approximately 0.30, 0.60, 0.60 and 1.50 seconds. Real timeouts may end them early. Reverse requires a standstill; MK7 B means brake at speed and reverse at/near zero speed. Left/right include limited throttle to make turning visible.
 
-## Later optional one-shot, only after rehearsal review
-1. Reconfirm normal controls, then park stationary and grounded on Toad Circuit.
-2. Select **4: Queue ONE-SHOT 3-frame A pulse**. Close CTRPF, unpause MK7 early in the five-second countdown and release A/B/START early. Do not manually hold A through the final seconds.
-3. It may briefly accelerate, or may produce no visible movement. Synthetic input ends after at most 3 hooked player frames or 350ms. Physical B/START aborts if observed by game hook; B/START can also abort via the slower on-screen callback.
-4. Inspect **2: Native hook diagnostics**: Native A frames (0–3), pass-through release frames, control state, and read/write failures. Hardware movement and control recovery must be observed separately; counters alone do not prove MK7's downstream vehicle used the synthetic input.
-5. Do not repeat a test in the same session. If anything becomes abnormal, stop, power-cycle and, if necessary, disable Luma3DS 3GX Plugin Loader and restore P006.3a.
+## Safety design
+- Opt-in hook installation; always runs MK7's original controller processing before optional game-frame changes.
+- Each command is one shot, with hard frame and real-time budgets; each of the four actions can be **attempted once per MK7 session**, and only after safety rehearsals. Attempt bitset in diagnostics indicates attempted, **not passed**.
+- Before every action, kart must be stationary and on the ground, input-neutral, with validated telemetry, 5-second countdown, B-abort rehearsal and completed dry-run.
+- Physical A/B/START or off-center stick (outside 6..8) cancels a synthetic command. Cancel cannot undo an in-progress memory write, nor guarantee no residual momentum.
+- Left/right use `KDPadDataOnFrame::m_stick_x` at +2; MK7's 0..14 x representation was cross-checked against mk7re's `tools/mk7re/dynamic/driver.c`. The controller pointer and exact behavior still require hardware verification. 
+- Release is verified by observing 3+ native input callbacks with no A/B and a centered physical stick. The original function refreshes the game-frame fields.
+- No online race use. Only test offline Toad Circuit Time Trial. A real game freeze cannot be resolved by a software abort.
+- Both source and binary of P006.3b remain preserved. If behavior becomes abnormal, stop, disable the plugin loader and revert to P006.3b.
 
-## Limitations
-- The title ID checks USA but **not exact game revision or offline race mode**. Only test offline.
-- **No software abort can rescue an entirely frozen game.** A concurrent cancel cannot undo one write in progress, nor can stopping A retroactively remove the kart's momentum.
-- A successful CI build validates compilation only, never real-hardware acceleration.
-- Do not extend the pulse, add steering, or enable any driving AI until the results have been reviewed.
+## Hardware protocol
+1. Back up tested P006.3b and fully power off the 3DS before replacing the `.3gx`. Enter MK7 USA revision 2, offline Toad Circuit Time Trial.
+2. Toggle READY, menu **1: Install PASS-THROUGH hook**. Drive normally for a few seconds: A, left/right circle pad, B. If any unexpected behavior, stop.
+3. Open **2: Native hook diagnostics**. Require hook YES, 1 signature, 30+ player callbacks, 10+ physical-A frames, zero read/write failures.
+4. Park stopped and grounded. Run **3: 5s SAFETY dry run**, close CTRPF/unpause early, release all controls and center stick well before 0. Wait until FINISHED.
+5. Run a second dry run and physically press B during the countdown. Check diagnostics show **Dry-run/physical B: YES/YES**.
+6. **STOP AND SHARE DIAGNOSTICS FIRST.** Once reviewed, select one action (4-7), starting with THROTTLE. Close menu/unpause game early; release buttons and center Circle Pad before the countdown ends. The action runs automatically and stops after its bounded input frames. Do not intervene unless abort is needed.
+7. Record which action was selected, whether kart moved in expected direction, whether it stopped receiving artificial input, and whether manual controls still work. Open menu 2 for frame count, attempt mask, release count and faults; send a photo. A successful memory write alone is insufficient to declare movement verified.
+8. Repeat a new action only after reviewing the prior result. Each action can be attempted once per process. P006.3b remains the fallback.
+9. After all four are independently verified on hardware, consider designing the learning subsystem (observation/action/reward dataset, policy interface, training loop, fallback and safe action envelopes). Do not assume reinforcement learning is possible on the console just because input tests work.
+
+## Experimental limitations
+- Exact ROM revision and offline Time Trial mode are not automatically established by title-ID detection. Check manually.
+- Steering is analog and may produce a smaller yaw change than expected; don't call it failed solely based on subjective movement. Correlate with telemetry and verify with an independent test if ambiguous.
+- P006.4 logs signed speed snapshot at arming and after the observation window; sparse telemetry may miss peaks and negative reverse speed could be represented unexpectedly. Human observation remains essential.
+- Success requires real-world outcome **and** native diagnostics. Memory modifications, CI compilation, or an action attempt mask do not prove physical input worked.
