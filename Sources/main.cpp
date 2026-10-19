@@ -2316,13 +2316,14 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P007b READY" : "CK P007b OFF",
+            screen.Draw(g_ready ? "CK P007b.1 READY" : "CK P007b.1 OFF",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
             // Only ~2Hz full pointer walks; <=10Hz lightweight flag reads.
             if (!menuOpen && g_ready &&
                 (g_live || g_recording || g_demoRecording ||
+                 g_aiPhase == AI_COUNTDOWN || g_aiPhase == AI_RUNNING ||
                  g_control == WAIT_CLOSE ||
                  g_control == COUNTDOWN || g_control == PULSE ||
                  g_control == OBSERVE || g_traceInput ||
@@ -2453,6 +2454,28 @@ namespace CTRPluginFramework
             {
                 screen.DrawRect(185, 224, 115, 14, Color::Black, true);
                 screen.Draw("BUFFER FULL", 187, 226, Color::Yellow, Color::Black);
+            }
+            if (g_aiPhase == AI_COUNTDOWN || g_aiPhase == AI_RUNNING)
+            {
+                char aiHud[60];
+                if (g_aiPhase == AI_COUNTDOWN)
+                {
+                    const u64 timeNow=osGetTime();
+                    const u64 elapsed=(g_aiMenuClosedAt &&
+                        timeNow>=g_aiMenuClosedAt)?
+                        timeNow-g_aiMenuClosedAt:0;
+                    const u64 remaining=elapsed>=AI_MENU_GRACE_MS?
+                        0:AI_MENU_GRACE_MS-elapsed;
+                    std::snprintf(aiHud,sizeof(aiHud),
+                        "AI READY IN %lus",static_cast<unsigned long>(
+                        (remaining+999)/1000));
+                }
+                else
+                    std::snprintf(aiHud,sizeof(aiHud),
+                        "AI DRIVING %lus",static_cast<unsigned long>(
+                        (osGetTime()-g_aiStartAt)/1000));
+                screen.DrawRect(160, 195, 159, 16, Color::Black, true);
+                screen.Draw(aiHud, 163, 197, Color::Yellow, Color::Black);
             }
             if (g_demoRecording)
             {
@@ -2792,7 +2815,7 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P007b", 0, 0, 2,
+        PluginMenu menu("Collie Kart P007b.1", 0, 0, 2,
             "On-device demonstration learner + supervised AI attempts.\n"
             "Offline MK7 USA Time Trial ONLY. Controller OFF at boot.");
         menu.SynchronizeWithFrame(true);
@@ -2826,8 +2849,8 @@ namespace CTRPluginFramework
             "Cycle 12, 30, 75 and 120 seconds. Always supervise.");
         menu += new MenuEntry("13: ABORT AI attempt", nullptr, AiAbortMenu,
             "Immediately drop artificial control authority.");
-        menu += new MenuEntry("14: AI attempt reports", nullptr, AiAttemptReport,
-            "Compare all attempts retained in RAM and model improvements.");
+        menu += new MenuEntry("14: AI attempt reports / startup diagnostics", nullptr, AiAttemptReport,
+            "Show countdown status, abort reasons and multi-attempt metrics.");
         menu += new MenuEntry("15: SAVE ALL attempt CSV files", nullptr, AiSaveAll,
             "Separate uniquely numbered CSV for each attempt, after driving.");
         menu += new MenuEntry("16: CLEAR saved attempt batch", nullptr, AiClearSaved,
