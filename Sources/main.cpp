@@ -1,7 +1,7 @@
-// Collie Kart Portable P006.4 -- safe PASS-THROUGH ONLY frame-hook preflight.
-// MK7-research frame-input interception with CTRPF MITM hook. No AI/autonomy.
-// No synthetic buttons can be generated in this version.
-// The first on-device native-hook test MUST remain read-only.
+// Collie Kart Portable P007a -- read-only manual demonstration capture.
+// Fast observation, waypoint extraction, CSV export. No AI driving.
+// No synthetic input menu actions; P006.4 remains preserved.
+// This iteration only records manual driving.
 // Previous P001-P006.2 passive telemetry, reward/CSV and backups preserved.
 
 #include <3ds.h>
@@ -500,6 +500,12 @@ namespace CTRPluginFramework
             {
                 MessageBox("Recorder inactive",
                     "First toggle CK P006 to READY, then start recording.")();
+                return;
+            }
+            if (g_demoRecording)
+            {
+                MessageBox("Recorder unavailable",
+                    "Stop the P007a demonstration recorder first.")();
                 return;
             }
             if (g_recording)
@@ -2196,7 +2202,8 @@ namespace CTRPluginFramework
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
             // Only ~2Hz full pointer walks; <=10Hz lightweight flag reads.
             if (!menuOpen && g_ready &&
-                (g_live || g_recording || g_control == WAIT_CLOSE ||
+                (g_live || g_recording || g_demoRecording ||
+                 g_control == WAIT_CLOSE ||
                  g_control == COUNTDOWN || g_control == PULSE ||
                  g_control == OBSERVE || g_traceInput ||
                  g_setterTrace))
@@ -2260,6 +2267,8 @@ namespace CTRPluginFramework
                     ReadNativeSetterPreflight();
                 }
                 ControlStep(osGetTime(), false);
+                if (g_demoRecording)
+                    SampleDemo(osGetTime());
                 if (g_recording && dueTelemetry)
                     CaptureSample();
             }
@@ -2307,6 +2316,14 @@ namespace CTRPluginFramework
             {
                 screen.DrawRect(185, 224, 115, 14, Color::Black, true);
                 screen.Draw("BUFFER FULL", 187, 226, Color::Yellow, Color::Black);
+            }
+            if (g_demoRecording)
+            {
+                char demoHud[45];
+                std::snprintf(demoHud, sizeof(demoHud), "DEMO %u/%u",
+                    g_demoCount, MAX_DEMO_SAMPLES);
+                screen.DrawRect(166, 211, 152, 12, Color::Black, true);
+                screen.Draw(demoHud, 170, 212, Color::Green, Color::Black);
             }
             // New control-authority indicator, without shifting P001's HUD.
             if (g_control == WAIT_CLOSE || g_control == COUNTDOWN ||
@@ -2360,6 +2377,11 @@ namespace CTRPluginFramework
                             " Do not assume controller interception has stopped.")();
                 }
                 g_recording = false; // Preserve unsaved data.
+                if (g_demoRecording)
+                {
+                    g_demoRecording = false;
+                    g_demoComplete = g_demoCount > 0;
+                }
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
             }
@@ -2614,30 +2636,24 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P006.4", 0, 0, 1,
-            "Four independent control tests, OFF at boot.\n"
-            "Requires calibration, dry-run and B-abort.");
+        PluginMenu menu("Collie Kart P007a", 0, 0, 1,
+            "READ-ONLY demonstration recorder + path analysis.\n"
+            "No autonomous driving or synthetic control.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
             "Master safety toggle for telemetry and native control.");
-        // P006.4 core tests stay at the top; the legacy diagnostics follow.
-        menu += new MenuEntry("1: Install PASS-THROUGH hook", nullptr, HookPassThrough,
-            "Native hook verification, no artificial input. Calibration first.");
-        menu += new MenuEntry("2: Native hook diagnostics", nullptr, NativeHookDiagnostics,
-            "Verify frame callbacks and real A input; inspect pulse results.");
-        menu += new MenuEntry("3: Queue 5s SAFETY dry run", nullptr, QueueDryRun,
-            "No injection; after a finish, repeat and press B to abort.");
-        menu += new MenuEntry("4: Test THROTTLE (A)", nullptr, QueueThrottle,
-            "18 game frames, once per MK7 process, starts stopped.");
-        menu += new MenuEntry("5: Test STEER LEFT (A+stick)", nullptr, QueueLeft,
-            "36 frames, left analog steering + brief throttle.");
-        menu += new MenuEntry("6: Test STEER RIGHT (A+stick)", nullptr, QueueRight,
-            "36 frames, right analog steering + brief throttle.");
-        menu += new MenuEntry("7: Test REVERSE (B)", nullptr, QueueReverse,
-            "90 frames at most, must start completely stopped.");
-        menu += new MenuEntry("8: ABORT control experiment", nullptr, CancelControl,
-            "Cancel countdown/pulse; physical B also aborts.");
+        // P007a is RECORD-ONLY. No synthetic input menu actions.
+        menu += new MenuEntry("1: START manual demonstration", nullptr, StartDemo,
+            "20Hz target in-RAM recording. Drive manually, no AI input.");
+        menu += new MenuEntry("2: STOP & ANALYZE demonstration", nullptr, StopAnalyzeDemo,
+            "Stop recording; extract reference path in RAM.");
+        menu += new MenuEntry("3: DEMO diagnostics", nullptr, DemoDiagnostics,
+            "Sample rate, input count, distance and motion-heading quality.");
+        menu += new MenuEntry("4: SAVE demo CSV to SD", nullptr, SaveDemoCSV,
+            "Write new SD:/CollieKart/demo_###.csv after stopping.");
+        menu += new MenuEntry("5: DISCARD demo in RAM", nullptr, DiscardDemo,
+            "Clears the RAM buffer only; existing SD files are untouched.");
         menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
             "Status of the last attempted telemetry probe.");
         menu += new MenuEntry("Read telemetry snapshot", nullptr, Snapshot,
