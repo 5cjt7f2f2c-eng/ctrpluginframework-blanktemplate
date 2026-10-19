@@ -3,23 +3,23 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 12
+    Revision: 13
 
 Targets:
 
-Title: Collie Kart Portable P006.4
+Title: Collie Kart Portable P007a
 
-Summary: Four independent bounded control tests on MK7 USA Rev 2
+Summary: Read-only manual driving demonstration recorder and waypoint analyzer
 
 Description: |
-    P006.4 extends the validated P006.3b native A input hook
-    into one-shot tests: throttle (18 frames), left/right analog
-    steering with A (36 frames each), and B reverse (90 frames).
-    A completed dry run, physical B abort rehearsal and normal
-    pass-through callback counts are required. One attempt per
-    action per session. Original input and human override have
-    priority. No AI training or unattended driving implemented.
-    Steering and reversing are unverified on 3DS hardware.
+    P007a begins on-device imitation learning research with manual
+    demonstration recording. A separate in-RAM recorder targets 20Hz,
+    reading position, speed, game-frame buttons and stick. A compact
+    reference trajectory is extracted on-device; CSV saved by explicit
+    menu action after stopping. No autonomous play, model training,
+    synthetic controls or native-hook installation are available
+    through the P007a menu. P006.4 is the proven hardware fallback.
+    Travel heading is estimated from position deltas, NOT actual yaw.
 
 Compatibility: Any
 
