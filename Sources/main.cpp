@@ -214,6 +214,41 @@ namespace CTRPluginFramework
         };
         Observation g_observation;
 
+        // P007a: isolated in-RAM manual demonstration recorder. Never drives.
+        // Movement heading is a DELTA-POSITION proxy, not vehicle facing yaw.
+        constexpr unsigned MAX_DEMO_SAMPLES = 4800; // 4min at target 20Hz
+        constexpr unsigned MAX_DEMO_WAYPOINTS = 960;
+        constexpr u64 DEMO_INTERVAL_MS = 50;
+        struct DemoFrame
+        {
+            u32 tMs = 0;
+            float x = 0, y = 0, z = 0, speed = 0;
+            float movementHeading = 0;
+            u16 buttons = 0;
+            u8 stickX = 7, lap = 0, checkpoint = 0;
+            bool headingValid = false;
+        };
+        struct DemoWaypoint
+        {
+            unsigned sourceIndex = 0;
+            float x = 0, z = 0, speed = 0;
+            float movementHeading = 0;
+            bool headingValid = false;
+        };
+        DemoFrame g_demoSamples[MAX_DEMO_SAMPLES];
+        DemoWaypoint g_demoWaypoints[MAX_DEMO_WAYPOINTS];
+        unsigned g_demoCount = 0, g_demoWaypointsCount = 0;
+        unsigned g_demoReadFails = 0, g_demoGapStops = 0;
+        unsigned g_demoHeadingCount = 0, g_demoLeftFrames = 0;
+        unsigned g_demoRightFrames = 0, g_demoAFrames = 0, g_demoBFrames = 0;
+        unsigned g_demoMaxGapMs = 0, g_demoMissedIntervals = 0;
+        float g_demoDistance = 0, g_demoFinalDisplacement = 0;
+        u32 g_demoKartAddress = 0;
+        u64 g_demoStartAt = 0, g_demoLastAt = 0;
+        bool g_demoRecording = false, g_demoComplete = false;
+        bool g_demoAnalyzed = false, g_demoStoppedOnFault = false;
+        std::string g_demoLastFile = "(none)";
+
         // Mode classification and candidate MK7 VehicleMove flags.
         enum Mode { UNKNOWN = 0, GROUND = 1, UNDERWATER = 2,
                     AIRBORNE = 3, GLIDING = 4 };
@@ -1153,6 +1188,7 @@ namespace CTRPluginFramework
             ++g_samples;
             Observation o;
             g_vehicleAddress = 0;
+            g_demoKartAddress = 0;
 
             if (Process::GetTitleID() != MK7_USA)
             {
@@ -1211,6 +1247,9 @@ namespace CTRPluginFramework
                 std::fabs(o.z) > 1000000.0f)
             { g_observation = o; return; }
 
+            // This pointer was validated by the existing full 2Hz scan.
+            // The 20Hz recorder reads only these cached fields.
+            g_demoKartAddress = kart;
             o.candidate = true;
             o.lap = static_cast<int>(lap) + 1;
             o.checkpoint = cp;
