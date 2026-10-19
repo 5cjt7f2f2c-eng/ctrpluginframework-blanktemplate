@@ -1,33 +1,35 @@
-# Collie Kart Portable P006.3a — pass-through safety preflight
+# Collie Kart P006.3b — guarded native A first-contact
 
-**HARDWARE STATUS: NOT YET TESTED. ACTUATOR HARD-DISABLED.**
+**BUILD MILESTONE ONLY UNTIL HARDWARE VERIFIED.** The P006.3a pass-through hook already passed New 3DS Mario Kart 7 USA revision 2 testing (522 player frames, 178 physical A frames, no read failures, normal driving and READY-off behavior). **The P006.3b artificial A write is NEW and untested.**
 
-This branch is deliberately narrower than the original P006.3. It retains all prior telemetry and safety rehearsals, but the native hook invokes the game's original `KDPadInputer::calcInput` and then performs **read-only, checked** inspection of the local player's input. The three-frame A actuator is inaccessible **and the native hook contains no memory writes**. This is a first-stage preflight for New Nintendo 3DS / Mario Kart 7 USA revision 2.
+## Safety changes
+- Original `KDPadInputer::calcInput` always executes first, preserving physical controls when the one-shot is not armed.
+- One-shot synthetic A may affect **at most three game-frame inputs**, with an independent **350 ms** expiry and no steering, HID or other button changes.
+- The input hook observes physical A/B/START; real B/START take priority. Holding physical A instead of the synthetic test cancels the substitution.
+- A checked `Process::Write16` performs the only in-frame mutation. Original MK7 processing refreshes physical data on subsequent calls. Cancel cannot reverse an already in-flight write.
+- `std::atomic` and compare-exchange distinguish OFF, ARMED, DONE, ABORT and WRITING, reducing late-write races.
+- Requires 30 native player frames, 10 physical A frames, zero read/write errors, a completed 5-second dry run, and a **separate physical B abort rehearsal**. Cannot attempt artificial input more than **once per MK7 process session**.
+- Turning READY off disarms the experiment and attempts to uninstall the hook; errors require quitting the title.
+- P006.3a and P006.2 remain untouched as backups.
 
-## What changed in P006.3a
-- Source is based on `collie-kart-p0063-frame-hook-first-contact`; stable P006.2 remains unchanged.
-- The hook is **PASS-THROUGH ONLY**, never substitutes a button. The old P006.3 experimental pulse code is not invoked by the menu, and the hook contains no button writes.
-- Pad and frame observations now use `Process::Read32/Read8/Read16` checked reads rather than unchecked raw pointer dereferences. These checks reduce risk but cannot absolutely prevent a memory race.
-- Callback-visible enable, pad, and count state uses C++ atomics.
-- Turning READY off disarms the experiment and **attempts to disable the installed hook**. Failure is explicitly reported. Abnormal behavior still requires quitting MK7 and disabling Luma3DS 3GX Plugin Loader.
-- Signature scanning validates mapped text pages (including boundary crossings), then reads mapped instructions directly for speed. Zero/multiple matches or unmapped pages prevent installation.
-- Diagnostics report native callback counts and rejected reads.
-- Cloud build targets `Collie-Kart-P0063a-3GX`; compilation **does not** establish real hardware compatibility.
+## Mandatory first hardware session — rehearsals only
+1. Save both known-good P006.3a and P006.2 `.3gx` backups on your iPhone/SD card. Fully power off 3DS before replacing the installed plugin with P006.3b.
+2. Start **OFFLINE Toad Circuit Time Trial only** (the build cannot independently verify Time Trial/online status). Check `CK P006.3b | INACTIVE`, then select READY.
+3. Choose **1: Install PASS-THROUGH hook**; drive manually with A, steering, B. Confirm the kart drives normally as in P006.3a.
+4. Open **2: Native hook diagnostics**. Require Hook installed YES, exactly 1 signature match, at least 30 player input frames and 10 physical-A frames, and zero read/write failures. Otherwise stop.
+5. Park on a flat, grounded road. Select **3: Queue 5s SAFETY dry run**. Close CTRPF; unpause MK7 early with A/START, then release controls well before the end. Wait for FINISHED. No artificial input occurs.
+6. Repeat **3: Queue 5s SAFETY dry run**, and press physical B during countdown to abort it. Diagnostics should report **Dry-run/physical B: YES/YES**.
+7. **STOP HERE AND SEND A DIAGNOSTIC PHOTO.** Do not run experimental menu option 4 until the rehearsals are reviewed. This separates safety validation from first write.
 
-## Conservative first hardware sequence (offline Time Trial ONLY)
-1. Back up the tested P006.2 plugin on your iPhone/SD card **before** changing the installed 3GX. Do not delete the backup.
-2. With the console fully powered off, install the compiled P006.3a `.3gx` at `SD:/luma/plugins/0004000000030800/CollieKart.3gx`.
-3. Boot MK7, enter **offline Toad Circuit Time Trial**, enable READY, and open the CTRPF menu.
-4. Choose **1: Install PASS-THROUGH hook**. If the game refuses with 0 or multiple signatures, STOP; do not retry with guessed addresses.
-5. Only if installation succeeds, resume play and manually hold A for a few seconds, steer, and press B. Ensure everything behaves exactly as before. Do **not** attempt any synthetic acceleration.
-6. Read **2: Native hook diagnostics**; record player callback frames, physical-A frames and read failures. Unexpected behavior, slowdown or anomalous reads: STOP and revert to P006.2.
-7. Switch READY off. The plugin should unhook and return to the normal native input path. If removal fails, stop and restart with plugin loader disabled.
-8. Send diagnostic screenshots to review. The next milestone, P006.3b, would separately reintroduce a synchronised, guarded actuator only after pass-through is confirmed.
+## Later optional one-shot, only after rehearsal review
+1. Reconfirm normal controls, then park stationary and grounded on Toad Circuit.
+2. Select **4: Queue ONE-SHOT 3-frame A pulse**. Close CTRPF, unpause MK7 early in the five-second countdown and release A/B/START early. Do not manually hold A through the final seconds.
+3. It may briefly accelerate, or may produce no visible movement. Synthetic input ends after at most 3 hooked player frames or 350ms. Physical B/START aborts if observed by game hook; B/START can also abort via the slower on-screen callback.
+4. Inspect **2: Native hook diagnostics**: Native A frames (0–3), pass-through release frames, control state, and read/write failures. Hardware movement and control recovery must be observed separately; counters alone do not prove MK7's downstream vehicle used the synthetic input.
+5. Do not repeat a test in the same session. If anything becomes abnormal, stop, power-cycle and, if necessary, disable Luma3DS 3GX Plugin Loader and restore P006.3a.
 
-## Important limitations
-- The Title ID check establishes MK7 **USA**, not an exact revision number; the external calcInput signature has not been verified on this exact console. A unique signature does not prove hook ABI safety.
-- **No in-game software can rescue a fully frozen title.** Power off, disable the Luma3DS plugin loader, and restore P006.2 if needed.
-- Install only for offline Time Trial research, not online races.
-- P006.2's successful test does not constitute P006.3a hardware validation.
-
-The original P006.3 research branch is retained for future reference and is **not** the recommended first hardware test build.
+## Limitations
+- The title ID checks USA but **not exact game revision or offline race mode**. Only test offline.
+- **No software abort can rescue an entirely frozen game.** A concurrent cancel cannot undo one write in progress, nor can stopping A retroactively remove the kart's momentum.
+- A successful CI build validates compilation only, never real-hardware acceleration.
+- Do not extend the pulse, add steering, or enable any driving AI until the results have been reviewed.
