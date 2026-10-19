@@ -3,23 +3,22 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 14
+    Revision: 16
 
 Targets:
 
-Title: Collie Kart Portable P007a.1
+Title: Collie Kart P007b
 
-Summary: Read-only recorder with 5-second resume grace and failure-stage diagnostics
+Summary: On-device demonstration learner and six-attempt session recorder
 
 Description: |
-    P007a.1 patches a failed recorder startup with manual
-    demonstration recording. A separate in-RAM recorder targets 20Hz,
-    reading position, speed, game-frame buttons and stick. A compact
-    reference trajectory is extracted on-device; CSV saved by explicit
-    menu action after stopping. No autonomous play, model training,
-    synthetic controls or native-hook installation are available
-    through the P007a.1 menu. P006.4 is the proven hardware fallback.
-    Travel heading is estimated from position deltas, NOT actual yaw.
+    Experimental supervised Mario Kart 7 USA Rev2 imitation driver.
+    Loads saved demonstration CSV, trains a small steering regression
+    entirely on New Nintendo 3DS, and drives toward waypoint reference
+    under hard native-command deadline with manual physical override.
+    Six attempts stored in RAM, with individual CSV decision/action/error
+    exports and best-performing steering-gain search. Only offline
+    Toad Circuit Time Trial. Untested on hardware; P006.4 fallback preserved.
 
 Compatibility: Any
 
