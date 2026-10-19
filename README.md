@@ -10,7 +10,7 @@ This branch is deliberately narrower than the original P006.3. It retains all pr
 - Pad and frame observations now use `Process::Read32/Read8/Read16` checked reads rather than unchecked raw pointer dereferences. These checks reduce risk but cannot absolutely prevent a memory race.
 - Callback-visible enable, pad, and count state uses C++ atomics.
 - Turning READY off disarms the experiment and **attempts to disable the installed hook**. Failure is explicitly reported. Abnormal behavior still requires quitting MK7 and disabling Luma3DS 3GX Plugin Loader.
-- Instruction signature scanning uses checked reads and refuses to install if any part of the image cannot be read, or if there are zero/multiple matches.
+- Signature scanning validates mapped text pages (including boundary crossings), then reads mapped instructions directly for speed. Zero/multiple matches or unmapped pages prevent installation.
 - Diagnostics report native callback counts and rejected reads.
 - Cloud build targets `Collie-Kart-P0063a-3GX`; compilation **does not** establish real hardware compatibility.
 
