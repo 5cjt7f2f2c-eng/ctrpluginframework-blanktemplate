@@ -3,25 +3,21 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 9
+    Revision: 10
 
 Targets:
 
-Title: Collie Kart Portable P006.3
+Title: Collie Kart Portable P006.3a
 
-Summary: MK7 opt-in per-frame native input hook with 3-frame accelerator experiment
+Summary: MK7 PASS-THROUGH ONLY input hook and checked-read safety preflight
 
 Description: |
-    P006.3 experiments with a separately armed, 3-frame A input hook.
-    It searches a uniquely matching MK7 USA calcInput signature and
-    allows PASS-THROUGH mode to be tested before any input injection.
-    Actual A replacement requires 30 game frames, 10 physical A frames,
-    a 5-second dry-run completion and a separate physical-B abort.
-    The hook invokes the original input processing and otherwise
-    leaves all controller input unchanged. Its A override is limited
-    to 3 game frames and a 350ms deadline, with B abort.
-    Restored human control and hardware compatibility are UNVERIFIED.
-    No HID injection or autonomous driving. P006.2 is the fallback.
+    P006.3a validates real-device game-frame interception with no
+    artificial input. The original MK7 controller processing always runs.
+    Read-checked pad inspection, atomic callback telemetry and READY-off
+    hook uninstall reduce risk; P006.2 remains the tested fallback.
+    It does NOT drive, inject buttons, or train an AI.
+    Hook safety and USA Rev2 compatibility remain hardware-UNVERIFIED.
 
 Compatibility: Any
 
