@@ -703,7 +703,7 @@ namespace CTRPluginFramework
         // MITM: original first, optionally modify only the local PLAYER pad's
         // current game-frame input. Never intercept UI pad or steering here.
         // If disabled, original input is returned on every frame unmodified.
-        // P006.3aa PASS-THROUGH ONLY: original MK7 input always runs.
+        // P006.3a PASS-THROUGH ONLY: original MK7 input always runs.
         // Deliberately no writes to button memory or synthetic input states.
         void NativeInputHook(u32 inputer)
         {
@@ -856,7 +856,7 @@ namespace CTRPluginFramework
                 "Dry-run/physical B: %s/%s\n"
                 "HID input injection: DISABLED\n"
                 "Read failures: %lu\n"
-                "Actuator: DISABLED in P006.3aa\n"
+                "Actuator: DISABLED in P006.3a\n"
                 "Frame-hook compatibility is still UNVERIFIED",
                 g_nativeHookEnabled.load(std::memory_order_acquire) ? "YES" : "NO",
                 static_cast<unsigned long>(g_nativeScanMatches),
@@ -1575,7 +1575,7 @@ namespace CTRPluginFramework
         // real-hardware hook build. Follow-up actuation needs a separate review.
         void QueueNativePulse(MenuEntry *)
         {
-            MessageBox("P006.3aa actuator LOCKED",
+            MessageBox("P006.3a actuator LOCKED",
                 "PASS-THROUGH ONLY. No game-frame writes in this build."
                 " First validate hook behavior on the New 3DS.")();
         }
@@ -2124,7 +2124,7 @@ namespace CTRPluginFramework
             "Verify frame callbacks and real A input; inspect pulse results.");
         menu += new MenuEntry("3: Queue 5s SAFETY dry run", nullptr, QueueDryRun,
             "No injection; after a finish, repeat and press B to abort.");
-        menu += new MenuEntry("4: NATIVE pulse LOCKED (P006.3aa)", nullptr, QueueNativePulse,
+        menu += new MenuEntry("4: NATIVE pulse LOCKED (P006.3a)", nullptr, QueueNativePulse,
             "No artificial input permitted until pass-through hardware validation.");
         menu += new MenuEntry("5: ABORT control experiment", nullptr, CancelControl,
             "Cancel countdown/pulse; physical B also aborts.");
