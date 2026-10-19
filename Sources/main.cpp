@@ -162,6 +162,15 @@ namespace CTRPluginFramework
         std::atomic<u32> g_nativeLastFrameMs{0};
         std::atomic<u32> g_nativeReleaseFrames{0}, g_nativeInjectedFrames{0};
         std::atomic<u32> g_nativeWriteFailures{0};
+        // P007b: authoritative on/off and bounded command for AI driving.
+        // OSD control loop refreshes a deadline; native hook never waits.
+        std::atomic<bool> g_aiAuthority{false};
+        std::atomic<u32> g_aiCommand{0}; // bits 0..15 buttons, 16..23 stick X
+        std::atomic<u32> g_aiDeadlineMs{0};
+        std::atomic<u32> g_aiActuatorFrames{0};
+        std::atomic<u32> g_aiActuatorFaults{0};
+        std::atomic<u32> g_aiPhysicalOverride{0};
+        std::atomic<u32> g_aiPassRelease{0};
         // P006.4: one controlled hardware attempt per action each session.
         enum NativeAction : u32 { TEST_NONE = 0, TEST_THROTTLE = 1,
             TEST_LEFT = 2, TEST_RIGHT = 3, TEST_REVERSE = 4 };
@@ -819,6 +828,57 @@ namespace CTRPluginFramework
             g_nativeLastFrameMs.store(now, std::memory_order_release);
             if (physical & 0x0001)
                 ++g_nativeManualAFrames;
+
+            // Autonomous learner and legacy P006.4 one-shot are mutually
+            // exclusive; the learner never uses the legacy pulse state.
+            // Verify physical-neutral before EVER modifying controller data.
+            if (g_aiAuthority.load(std::memory_order_acquire))
+            {
+                if ((physical & 0x000B) || stickX < 6 || stickX > 8)
+                {
+                    g_aiPhysicalOverride.store(1, std::memory_order_release);
+                    g_aiAuthority.store(false, std::memory_order_release);
+                    return;
+                }
+                const u32 end = g_aiDeadlineMs.load(std::memory_order_acquire);
+                if (static_cast<s32>(end - now) <= 0)
+                {
+                    g_aiAuthority.store(false, std::memory_order_release);
+                    return; // stale OSD command; fail open to physical control
+                }
+                const u32 command = g_aiCommand.load(std::memory_order_acquire);
+                const u16 buttons = static_cast<u16>(command & 0x0003);
+                const u8 steering = static_cast<u8>((command >> 16) & 0xFF);
+                if (steering > 14)
+                {
+                    g_aiActuatorFaults.fetch_add(1);
+                    g_aiAuthority.store(false, std::memory_order_release);
+                    return;
+                }
+                if (!Process::Write8(frame + 2, steering))
+                {
+                    g_aiActuatorFaults.fetch_add(1);
+                    g_aiAuthority.store(false, std::memory_order_release);
+                    return;
+                }
+                if (!Process::Write16(frame,
+                        static_cast<u16>(physical | buttons)))
+                {
+                    // Best-effort restore of current physical stick value.
+                    Process::Write8(frame + 2, stickX);
+                    g_aiActuatorFaults.fetch_add(1);
+                    g_aiAuthority.store(false, std::memory_order_release);
+                    return;
+                }
+                g_aiActuatorFrames.fetch_add(1);
+                return;
+            }
+            // Count original game-refresh frames after disengagement.
+            if (!g_aiAuthority.load() &&
+                g_aiActuatorFrames.load() > 0 &&
+                g_aiPassRelease.load() < 12 &&
+                !(physical & 3) && stickX >= 6 && stickX <= 8)
+                g_aiPassRelease.fetch_add(1);
 
             const u32 state = g_nativePulseState.load(std::memory_order_acquire);
             if (state == 2)
@@ -2461,6 +2521,7 @@ namespace CTRPluginFramework
                     g_demoRecording = false;
                     g_demoComplete = g_demoCount > 0;
                 }
+                g_aiAuthority.store(false, std::memory_order_release);
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
             }
@@ -2699,6 +2760,8 @@ namespace CTRPluginFramework
     void PatchProcess(FwkSettings &) {}
     void OnProcessExit(void)
     {
+        g_aiAuthority.store(false, std::memory_order_release);
+        g_aiDeadlineMs.store(0, std::memory_order_release);
         g_nativePulseState = 0;
         g_nativePlayerPad = 0;
         g_nativeHookEnabled = false;
