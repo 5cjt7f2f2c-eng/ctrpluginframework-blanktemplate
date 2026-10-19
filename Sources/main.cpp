@@ -1476,7 +1476,6 @@ namespace CTRPluginFramework
             g_demoGapStops = g_demoMissedIntervals = 0;
             g_demoLastFault = g_demoFirstFault = 0; g_demoActiveAt = 0;
             g_demoMenuClosedAt = 0;
-            g_demoMenuClosedAt = 0;
             g_demoHeadingCount = g_demoLeftFrames = g_demoRightFrames = 0;
             g_demoAFrames = g_demoBFrames = g_demoMaxGapMs = 0;
             g_demoDistance = g_demoFinalDisplacement = 0;
@@ -1641,6 +1640,7 @@ namespace CTRPluginFramework
             g_demoReadFails = g_demoReadFaultTotal = g_demoPauseWaits = 0;
             g_demoGapStops = g_demoMissedIntervals = 0;
             g_demoLastFault = g_demoFirstFault = 0; g_demoActiveAt = 0;
+            g_demoMenuClosedAt = 0;
             g_demoHeadingCount = g_demoLeftFrames = g_demoRightFrames = 0;
             g_demoAFrames = g_demoBFrames = g_demoMaxGapMs = 0;
             g_demoDistance = g_demoFinalDisplacement = 0;
