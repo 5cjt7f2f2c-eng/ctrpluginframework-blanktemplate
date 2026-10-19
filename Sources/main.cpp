@@ -2211,7 +2211,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P006.4 | READY" : "CK P006.4 | INACTIVE",
+            screen.Draw(g_ready ? "CK P007a | READY" : "CK P007a | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -2657,7 +2657,7 @@ namespace CTRPluginFramework
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
-            "Master safety toggle for telemetry and native control.");
+            "Master toggle for read-only observation and demonstration capture.");
         // P007a is RECORD-ONLY. No synthetic input menu actions.
         menu += new MenuEntry("1: START manual demonstration", nullptr, StartDemo,
             "20Hz target in-RAM recording. Drive manually, no AI input.");
