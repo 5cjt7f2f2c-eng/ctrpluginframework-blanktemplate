@@ -2406,6 +2406,9 @@ namespace CTRPluginFramework
             }
             else if (menuOpen && g_aiPhase == AI_RUNNING)
                 AiStop(AI_MENU); // menu opening always removes authority
+            else if (menuOpen && g_aiPhase == AI_COUNTDOWN &&
+                     g_aiMenuClosedAt != 0)
+                AiStop(AI_MENU); // cannot bypass 5s interlock by reopening
             // A queued test cannot silently survive losing READY or menu reopen.
             else if (g_control == COUNTDOWN || g_control == PULSE ||
                      g_control == OBSERVE)
