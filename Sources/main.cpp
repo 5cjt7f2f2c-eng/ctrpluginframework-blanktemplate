@@ -242,6 +242,8 @@ namespace CTRPluginFramework
         unsigned g_demoPauseWaits = 0, g_demoGapStops = 0;
         u32 g_demoLastFault = 0, g_demoFirstFault = 0;
         u64 g_demoActiveAt = 0;
+        u64 g_demoMenuClosedAt = 0;
+        constexpr u64 DEMO_POST_MENU_GRACE_MS = 5000; // time to unpause MK7
         unsigned g_demoHeadingCount = 0, g_demoLeftFrames = 0;
         unsigned g_demoRightFrames = 0, g_demoAFrames = 0, g_demoBFrames = 0;
         unsigned g_demoMaxGapMs = 0, g_demoMissedIntervals = 0;
@@ -1451,7 +1453,7 @@ namespace CTRPluginFramework
             if (Process::GetTitleID() != MK7_USA || !g_ready ||
                 g_recording || g_demoRecording)
             {
-                MessageBox("P007a demo unavailable",
+                MessageBox("P007a.1 demo unavailable",
                     "Need MK7 USA, READY, and no active recorder.")();
                 return;
             }
@@ -1473,6 +1475,8 @@ namespace CTRPluginFramework
             g_demoReadFails = g_demoReadFaultTotal = g_demoPauseWaits = 0;
             g_demoGapStops = g_demoMissedIntervals = 0;
             g_demoLastFault = g_demoFirstFault = 0; g_demoActiveAt = 0;
+            g_demoMenuClosedAt = 0;
+            g_demoMenuClosedAt = 0;
             g_demoHeadingCount = g_demoLeftFrames = g_demoRightFrames = 0;
             g_demoAFrames = g_demoBFrames = g_demoMaxGapMs = 0;
             g_demoDistance = g_demoFinalDisplacement = 0;
@@ -1481,9 +1485,10 @@ namespace CTRPluginFramework
             g_demoComplete = g_demoAnalyzed = g_demoStoppedOnFault = false;
             g_demoRecording = true;
             MessageBox("P007a MANUAL demo started",
-                "Close CTRPF and DRIVE YOURSELF. Nothing controls the kart."
-                " When finished, open menu and select STOP & ANALYZE."
-                " First test: 5-10s on a simple stretch.")();
+                "Close CTRPF, resume MK7 immediately, and let the"
+                " visible FIVE-SECOND countdown finish. Then drive"
+                " manually for 5-10s. No synthetic input is used."
+                " When finished, choose STOP & ANALYZE.")();
         }
         void StopAnalyzeDemo(MenuEntry *)
         {
@@ -1517,7 +1522,10 @@ namespace CTRPluginFramework
                 "Manual A/B: %u/%u | stick L/R: %u/%u\n"
                 "Path length: %.1f | endpoint delta: %.1f\n"
                 "Reference points: %u\n"
-                "Recent consecutive read faults: %u\n"
+                "Consecutive/total read faults: %u/%u\n"
+                "Pause-wait samples: %u\n"
+                "First failed field: %s (%lu)\n"
+                "Last status: %s (%lu)\n"
                 "Stopped on anomaly: %s\n"
                 "Last demo file: %s\n"
                 "Travel heading != actual kart yaw.",
@@ -1533,9 +1541,14 @@ namespace CTRPluginFramework
                 g_demoLeftFrames, g_demoRightFrames,
                 g_demoDistance, g_demoFinalDisplacement,
                 g_demoWaypointsCount, g_demoReadFails,
+                g_demoReadFaultTotal, g_demoPauseWaits,
+                DemoFaultName(g_demoFirstFault),
+                static_cast<unsigned long>(g_demoFirstFault),
+                DemoFaultName(g_demoLastFault),
+                static_cast<unsigned long>(g_demoLastFault),
                 g_demoStoppedOnFault ? "YES" : "NO",
                 g_demoLastFile.c_str());
-            MessageBox("P007a Demo Diagnostics", msg)();
+            MessageBox("P007a.1 Demo Diagnostics", msg)();
         }
         void SaveDemoCSV(MenuEntry *)
         {
@@ -2237,7 +2250,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P007a | READY" : "CK P007a | INACTIVE",
+            screen.Draw(g_ready ? "CK P007a.1 READY" : "CK P007a.1 OFF",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -2309,7 +2322,18 @@ namespace CTRPluginFramework
                 }
                 ControlStep(osGetTime(), false);
                 if (g_demoRecording)
-                    SampleDemo(osGetTime());
+                {
+                    // A new demonstration begins only AFTER an independent
+                    // five-second menu-exit/unpause grace period.
+                    const u64 demoNow = osGetTime();
+                    if (!g_demoMenuClosedAt)
+                        g_demoMenuClosedAt = demoNow;
+                    if (demoNow < g_demoMenuClosedAt)
+                        DemoStopFault(17);
+                    else if (demoNow - g_demoMenuClosedAt >=
+                             DEMO_POST_MENU_GRACE_MS)
+                        SampleDemo(demoNow);
+                }
                 if (g_recording && dueTelemetry)
                     CaptureSample();
             }
@@ -2361,8 +2385,22 @@ namespace CTRPluginFramework
             if (g_demoRecording)
             {
                 char demoHud[45];
-                std::snprintf(demoHud, sizeof(demoHud), "DEMO %u/%u",
-                    g_demoCount, MAX_DEMO_SAMPLES);
+                const u64 demoNow = osGetTime();
+                if (!g_demoMenuClosedAt ||
+                    (demoNow >= g_demoMenuClosedAt &&
+                     demoNow - g_demoMenuClosedAt < DEMO_POST_MENU_GRACE_MS))
+                {
+                    const u64 remaining = !g_demoMenuClosedAt
+                        ? DEMO_POST_MENU_GRACE_MS :
+                          DEMO_POST_MENU_GRACE_MS -
+                            (demoNow - g_demoMenuClosedAt);
+                    std::snprintf(demoHud, sizeof(demoHud),
+                        "DEMO IN %lus", static_cast<unsigned long>(
+                            (remaining + 999) / 1000));
+                }
+                else
+                    std::snprintf(demoHud, sizeof(demoHud),
+                        "DEMO %u/%u", g_demoCount, MAX_DEMO_SAMPLES);
                 screen.DrawRect(166, 211, 152, 12, Color::Black, true);
                 screen.Draw(demoHud, 170, 212, Color::Green, Color::Black);
             }
@@ -2677,7 +2715,7 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P007a", 0, 0, 1,
+        PluginMenu menu("Collie Kart P007a.1", 0, 0, 1,
             "READ-ONLY demonstration recorder + path analysis.\n"
             "No autonomous driving or synthetic control.");
         menu.SynchronizeWithFrame(true);
