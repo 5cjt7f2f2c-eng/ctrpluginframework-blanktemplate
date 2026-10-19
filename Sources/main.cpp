@@ -2316,7 +2316,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P007b.1 READY" : "CK P007b.1 OFF",
+            screen.Draw(g_ready ? "CK P007b.2 READY" : "CK P007b.2 OFF",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -2815,7 +2815,7 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P007b.1", 0, 0, 2,
+        PluginMenu menu("Collie Kart P007b.2", 0, 0, 2,
             "On-device demonstration learner + supervised AI attempts.\n"
             "Offline MK7 USA Time Trial ONLY. Controller OFF at boot.");
         menu.SynchronizeWithFrame(true);
