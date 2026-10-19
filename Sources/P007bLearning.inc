@@ -679,7 +679,7 @@ void AiStep(u64 now,bool menuOpen)
     // Stop must be evaluated BEFORE publishing another A or B input.
     // The last observation remains in the flight recorder.
     if(g_aiTerminalDemo && g_aiArcProgress>=0.80f &&
-       endpointDistance<=8.0f && std::fabs(speed)<=1.2f)
+       endpointDistance<=8.0f && std::fabs(speed)<=0.6f)
     {
         t.buttons=0;t.stick=7;t.cmdSteer=0;
         AiStop(AI_ROUTE_DONE);
