@@ -1,40 +1,33 @@
-# Collie Kart P006.4 — Four-Control Hardware Validation
+# Collie Kart P007a — read-only demonstration recorder
 
-**UNTESTED on hardware. NOT a learning AI.** Based on the successful P006.3b: three synthetic A frames, brief movement, 12 natural-input release frames, zero read/write failures, controls restored. Preserve that branch and compiled plugin.
+**NOT YET TESTED ON NEW 3DS.** Based on the hardware-successful P006.4 four-control test branch. Original P006.4 is unchanged and remains the rollback build.
 
-## Test matrix
-| Menu | Action | Native inputs | Max game-frame callbacks | Deadline |
-| --- | --- | --- | ---: | ---: |
-| 4 | Throttle | A | 18 | 700 ms |
-| 5 | Steer left | A + stick X=2 (center=7) | 36 | 1100 ms |
-| 6 | Steer right | A + stick X=12 (center=7) | 36 | 1100 ms |
-| 7 | Reverse | B, stick unchanged | 90 | 2300 ms |
+## Objective
+Teach Collie Kart to OBSERVE a driver's motion and input choices before attempting an imitation controller. P007a does **not** imitate or learn a driving policy, use synthetic controller inputs, or install a native hook. No training yet. It records, summarizes, and exports a reference dataset **entirely on the New Nintendo 3DS**.
 
-At 60 FPS these correspond to approximately 0.30, 0.60, 0.60 and 1.50 seconds. Real timeouts may end them early. Reverse requires a standstill; MK7 B means brake at speed and reverse at/near zero speed. Left/right include limited throttle to make turning visible.
+## How data is acquired
+- Existing USA Rev2 `Probe()` finds/validates player kart and vehicle objects at the original **2Hz** cadence; P007a caches a kart data address from that validated chain.
+- A separate **50ms target** loop reads only cached position coordinates, speed and player pad's current game-frame A/B button bits and horizontal analog-stick byte (0..14, neutral=7).
+- The recorder observes the actual local-player controller pad through `VehicleControl::m_player_pad` at +0xE0; MK7 menu presses are excluded while CTRPF is open.
+- Movement bearing is estimated via `atan2(delta_z, delta_x)` ONLY when the kart has moved far enough between readings. **This is travel heading, not proven vehicle facing yaw** (unreliable at low speeds, while reversing, drifting or sliding).
+- Time is derived from timestamps of actual valid samples, not from a presumed FPS. A sampling target is not a guaranteed achieved rate.
+- Cache invalidation, implausible position jumps and repeated read failures cause the recorder to **preserve buffered samples and stop**, rather than assume an invalid pointer is usable.
+- At most 4,800 manual samples (nominal 4 minutes at 20Hz) in RAM. **No SD writes during gameplay.**
+- On stop, analyze in RAM: total approximate path length, endpoint displacement, manual A/B/steering counts, sample gaps, motion-bearing availability and a reference trajectory of up to 960 waypoints, downsampled to about 4Hz. The final endpoint is always retained.
+- On explicit SAVE, export to `SD:/CollieKart/demo_001.csv`, then increment to the next available name. File contains each timestamped raw observation and a `reference_waypoint` flag. RAM is retained if saving fails.
 
-## Safety design
-- Opt-in hook installation; always runs MK7's original controller processing before optional game-frame changes.
-- Each command is one shot, with hard frame and real-time budgets; each of the four actions can be **attempted once per MK7 session**, and only after safety rehearsals. Attempt bitset in diagnostics indicates attempted, **not passed**.
-- Before every action, kart must be stationary and on the ground, input-neutral, with validated telemetry, 5-second countdown, B-abort rehearsal and completed dry-run.
-- Physical A/B/START or off-center stick (outside 6..8) cancels a synthetic command. Cancel cannot undo an in-progress memory write, nor guarantee no residual momentum.
-- Left/right use `KDPadDataOnFrame::m_stick_x` at +2; MK7's 0..14 x representation was cross-checked against mk7re's `tools/mk7re/dynamic/driver.c`. The controller pointer and exact behavior still require hardware verification. 
-- Release is verified by observing 3+ native input callbacks with no A/B and a centered physical stick. The original function refreshes the game-frame fields.
-- No online race use. Only test offline Toad Circuit Time Trial. A real game freeze cannot be resolved by a software abort.
-- Both source and binary of P006.3b remain preserved. If behavior becomes abnormal, stop, disable the plugin loader and revert to P006.3b.
+## Safe first test (no AI driving)
+1. Back up your successful `P006.4` plugin. Power off the 3DS and install `CollieKart.3gx` to `SD:/luma/plugins/0004000000030800/`.
+2. Boot **MK7 USA revision 2**, enter an **offline Toad Circuit Time Trial**. Check overlay says `CK P007a | INACTIVE`. Toggle READY.
+3. Select `1: START manual demonstration`. Close CTRPF, then **drive a very short 5–10 second straight or gentle curve** using real A/Circle Pad/B.
+4. Open the plugin menu and choose `2: STOP & ANALYZE demonstration`.
+5. Select `3: DEMO diagnostics`; take a photograph showing sample count, actual effective Hz, heading validity, path distance, any anomalies, and button/stick counts.
+6. Select `4: SAVE demo CSV to SD`. Copy `SD:/CollieKart/demo_###.csv` to the chat if possible; send the diagnostics photo regardless.
+7. `5: DISCARD demo in RAM` allows a new demonstration, but intentionally clears only the unsaved RAM buffer. Save first if you want to keep it.
+8. On issues such as zero samples, low sample frequency, unnatural position discontinuities, crashes or game slowdown, **stop and restore P006.4**. Do not proceed toward automated control yet.
 
-## Hardware protocol
-1. Back up tested P006.3b and fully power off the 3DS before replacing the `.3gx`. Enter MK7 USA revision 2, offline Toad Circuit Time Trial.
-2. Toggle READY, menu **1: Install PASS-THROUGH hook**. Drive normally for a few seconds: A, left/right circle pad, B. If any unexpected behavior, stop.
-3. Open **2: Native hook diagnostics**. Require hook YES, 1 signature, 30+ player callbacks, 10+ physical-A frames, zero read/write failures.
-4. Park stopped and grounded. Run **3: 5s SAFETY dry run**, close CTRPF/unpause early, release all controls and center stick well before 0. Wait until FINISHED.
-5. Run a second dry run and physically press B during the countdown. Check diagnostics show **Dry-run/physical B: YES/YES**.
-6. **STOP AND SHARE DIAGNOSTICS FIRST.** Once reviewed, select one action (4-7), starting with THROTTLE. Close menu/unpause game early; release buttons and center Circle Pad before the countdown ends. The action runs automatically and stops after its bounded input frames. Do not intervene unless abort is needed.
-7. Record which action was selected, whether kart moved in expected direction, whether it stopped receiving artificial input, and whether manual controls still work. Open menu 2 for frame count, attempt mask, release count and faults; send a photo. A successful memory write alone is insufficient to declare movement verified.
-8. Repeat a new action only after reviewing the prior result. Each action can be attempted once per process. P006.3b remains the fallback.
-9. After all four are independently verified on hardware, consider designing the learning subsystem (observation/action/reward dataset, policy interface, training loop, fallback and safe action envelopes). Do not assume reinforcement learning is possible on the console just because input tests work.
-
-## Experimental limitations
-- Exact ROM revision and offline Time Trial mode are not automatically established by title-ID detection. Check manually.
-- Steering is analog and may produce a smaller yaw change than expected; don't call it failed solely based on subjective movement. Correlate with telemetry and verify with an independent test if ambiguous.
-- P006.4 logs signed speed snapshot at arming and after the observation window; sparse telemetry may miss peaks and negative reverse speed could be represented unexpectedly. Human observation remains essential.
-- Success requires real-world outcome **and** native diagnostics. Memory modifications, CI compilation, or an action attempt mask do not prove physical input worked.
+## Important limitations and next gate
+- The fast snapshot access pattern and target rate require real-hardware validation. Do not claim the recorder is reliable solely from a successful compile.
+- Heading from displacement is an approximation; **true facing orientation is not yet instrumented**. A later feedback controller will require accurate orientation and scene-transition handling.
+- Track geometry, collision responses, a trained model and autonomous control do not exist in this branch.
+- We will only develop P007b's on-device learning and supervised adaptive reproduction after the recorder proves accurate, fast and stable with a real `demo_###.csv`.
