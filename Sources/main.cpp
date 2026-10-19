@@ -751,16 +751,20 @@ namespace CTRPluginFramework
             constexpr u32 sig[4] = {
                 0xE5901004, 0xE3510001, 0x1A000002, 0xE5901000
             };
+            // CTRPF's address validator uses a lock/region lookup.
+            // Validate each mapped text PAGE, not four times per word:
+            // full Read32 for every instruction would stall installation.
             for (u32 a = textStart; a <= textStart + textSize - 16; a += 4)
             {
-                u32 insn[4] = {};
-                // A bad or unmapped game text page fails closed, rather than
-                // risking an unchecked dereference while scanning.
-                if (!Process::Read32(a, insn[0]) ||
-                    !Process::Read32(a + 4, insn[1]) ||
-                    !Process::Read32(a + 8, insn[2]) ||
-                    !Process::Read32(a + 12, insn[3]))
+                if ((a & 0xFFF) == 0 &&
+                    !Process::CheckAddress(a, MEMPERM_READ))
                     return 0;
+                // A four-word candidate might straddle the next page.
+                if ((a & 0xFFF) > 0xFF0 &&
+                    !Process::CheckAddress((a + 12) & ~0xFFFu, MEMPERM_READ))
+                    return 0;
+                const volatile u32 *insn =
+                    reinterpret_cast<const volatile u32 *>(a);
                 if (insn[0] == sig[0] && insn[1] == sig[1] &&
                     insn[2] == sig[2] && insn[3] == sig[3])
                 {
