@@ -970,38 +970,40 @@ namespace CTRPluginFramework
 
         void NativeHookDiagnostics(MenuEntry *)
         {
-            char msg[700];
+            char msg[950];
+            const u32 a = g_nativeAction.load(std::memory_order_acquire);
             std::snprintf(msg, sizeof(msg),
-                "Hook installed: %s\n"
-                "Signature matches: %lu\n"
-                "Hook addr: 0x%08lX\n"
-                "Player input frames: %lu\n"
-                "Physical-A hook frames: %lu\n"
-                "Pulse trials: %u\n"
-                "Native A frames: %lu\n"
-                "Pass-through release frames: %lu\n"
-                "Native state: %lu (0 off/1 arm/2 done/3 abort/4 write)\n"
+                "Hook: %s | Signatures: %lu\n"
+                "Hook address: 0x%08lX\n"
+                "Local frames: %lu | physical A: %lu\n"
+                "Action: %s\n"
+                "Trials total: %u | attempt mask: 0x%02lX\n"
+                "Written frames: %lu/%lu | last stick X: %lu\n"
+                "Release frames: %lu | state: %lu\n"
                 "Control phase: %s\n"
-                "Dry-run/physical B: %s/%s\n"
-                "HID input injection: DISABLED\n"
+                "Dry-run / physical B: %s/%s\n"
                 "Read/write failures: %lu/%lu\n"
-                "Actuator: one-shot, max 3 A frames\n"
-                "Artificial A delivery UNVERIFIED",
+                "Speed before/end: %.2f / %.2f\n"
+                "Direction success: VISUAL CONFIRMATION REQUIRED",
                 g_nativeHookEnabled.load(std::memory_order_acquire) ? "YES" : "NO",
                 static_cast<unsigned long>(g_nativeScanMatches),
                 static_cast<unsigned long>(g_nativeHookAddress),
-                static_cast<unsigned long>(g_nativeSeenFrames),
-                static_cast<unsigned long>(g_nativeManualAFrames),
-                g_nativePulseTrials,
-                static_cast<unsigned long>(g_nativeInjectedFrames),
-                static_cast<unsigned long>(g_nativeReleaseFrames),
-                static_cast<unsigned long>(g_nativePulseState),
+                static_cast<unsigned long>(g_nativeSeenFrames.load()),
+                static_cast<unsigned long>(g_nativeManualAFrames.load()),
+                NativeActionName(a), g_nativePulseTrials,
+                static_cast<unsigned long>(g_nativeAttemptMask.load()),
+                static_cast<unsigned long>(g_nativeInjectedFrames.load()),
+                static_cast<unsigned long>(ActionFrameLimit(a)),
+                static_cast<unsigned long>(g_nativeLastStick.load()),
+                static_cast<unsigned long>(g_nativeReleaseFrames.load()),
+                static_cast<unsigned long>(g_nativePulseState.load()),
                 ControlName(g_control),
                 g_dryRunComplete ? "YES" : "NO",
                 g_physicalAbortVerified ? "YES" : "NO",
-                static_cast<unsigned long>(g_nativeReadFailures),
-                static_cast<unsigned long>(g_nativeWriteFailures));
-            MessageBox("P006.4 Native Frame Hook", msg)();
+                static_cast<unsigned long>(g_nativeReadFailures.load()),
+                static_cast<unsigned long>(g_nativeWriteFailures.load()),
+                g_nativeSpeedBefore, g_nativeSpeedAfter);
+            MessageBox("P006.4 Four-Control Diagnostics", msg)();
         }
 
         // mk7re/MK7-Memory: KDPad::m_data_on_frame +0x1C,
@@ -1717,7 +1719,7 @@ namespace CTRPluginFramework
                   " Close CTRPF and unpause MK7 early in countdown."
                   " RELEASE A/B/START and center the Circle Pad."
                   " B/START or physical stick aborts during injection."
-                  " If controls stick, exit MK7 and restore P006.4.")();
+                  " If controls stick, exit MK7 and restore P006.3b.")();
         }
 
         void QueueDryRun(MenuEntry *) { QueueControlExperiment(true); }
