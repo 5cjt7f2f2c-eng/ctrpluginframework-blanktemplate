@@ -1,26 +1,34 @@
-# Collie Kart P007a.1 — Menu-exit startup fix and capture diagnostics
+# Collie Kart P007b — First on-device learning + six retained attempts
 
-**Hardware UNTESTED.** P007a's first console session produced 0 samples, 9 consecutive rejected samples, then fault-stop. Actual observed callback gap was 68 ms with no gaps >150ms. This does NOT prove the root cause. The original code incorrectly treated every failed check—including the game's paused input pad—as a memory-read fault.
+**P007b HAS NOT BEEN TESTED ON NEW 3DS HARDWARE.** Successful compilation alone does not verify autonomous driving, controller shutdown, learning, or performance. Preserve the tested P006.4 and read-only P007a.1 binaries. No online races.
 
-## Fixes
-- **Five-second post-menu grace**, starting when CTRPF closes, with on-screen `DEMO IN 5s` countdown. Resume MK7 with A/START EARLY in this window; drive only after countdown finishes.
-- After grace, pause flag remains a WAIT condition, not a read error. Recorder waits for game-pad unpause. Ten seconds of persistent paused state after grace is a stop/fault with label.
-- Every individual read and range check reports a named failure source. Diagnostics show first and most recent failure, number of pause-waits, total memory errors and consecutive errors.
-- Initial transient reads are tolerated for up to 2.5s after grace; persistent failed reads still end capture safely, preserving RAM.
-- No control injection, no AI policy, no unattended driving. Original P006.4 and P007a preserved.
+## What is implemented
+- Load the latest `/CollieKart/demo_###.csv` saved by P007a.1, or make a fresh manual demonstration.
+- Fit a four-weight regression on-device: predict recorded steering from the angle to a future sampled path point and observed speed. This is a *small supervised learner*, not a large neural network.
+- A hybrid reference-path matcher searches only forward waypoint segments, compares live position and movement direction against recorded path, predicts controls and corrects heading deviations. Model decisions use live position, not exact elapsed-time button replay.
+- Native input callback carries bounded commands, renewed every `~65ms`. Each action expires independently after 180ms if UI processing stalls. Original physical controller executes first. A/B/START or Circle Pad movement immediately revokes artificial authority at the native hook.
+- Per-action controller read/write faults, menu opening, READY-off, invalid inputs, stale position, route error above 95 coordinate units, time horizon, and physical override stop the AI.
+- Six detailed AI attempts stored together in RAM. Each has independent decision trace, route error, inputs, model parameters, score, delivery counts and stopping reason.
+- Session report compares all attempts, and `SAVE ALL ATTEMPTS` writes separate uniquely numbered `ai_attempt_###.csv` files to SD. The saved batch can then be cleared while keeping the loaded demo and best learned gain.
+- After each valid attempt the system evaluates completion and mean route error, keeps the best performing correction parameter set and proposes a nearby variation for the next attempt. This is a constrained empirical parameter search, **not proof of improving driving** until hardware outcomes are compared.
+- Record and analysis remain on the physical 3DS. No SD writes while AI is driving.
 
-## Strict first hardware test
-1. Back up P006.4, power off the New 3DS, replace `CollieKart.3gx` under `SD:/luma/plugins/0004000000030800/`. Start offline MK7 USA Rev2 Time Trial, Toad Circuit.
-2. Toggle READY. Select **1 START manual demonstration**. Close CTRPF, **resume MK7 immediately using A or START during the visible 5-second countdown**, and release buttons as needed. The HUD should show `DEMO IN Ns`.
-3. Once countdown ends, drive normally for 5–10 seconds. No synthetic inputs are active.
-4. Open CTRPF, select **2 STOP & ANALYZE**, then **3 DEMO diagnostics**. Photograph both the top and scrolled bottom of the diagnostic panel.
-5. If valid samples > 0, inspect sampling rate, input counts, pause wait count and anomalies. Then save via **4 SAVE demo CSV**, send `SD:/CollieKart/demo_###.csv` if possible.
-6. If 0 valid samples, **do not repeat**. Share first/last failing field, total read errors, pause waits and fault state. This identifies the actual failure stage.
-7. If the game slows, freezes or behaves strangely, stop and restore P006.4. We have not hardware-validated this new build.
+## Critical hardware testing gate (start here — do not immediately run an AI attempt)
+1. **Back up P006.4 and P007a.1**, power off the New 3DS, install `CollieKart.3gx` under `SD:/luma/plugins/0004000000030800/` and start **offline Toad Circuit Time Trial only** on MK7 USA Rev2.
+2. Enable READY. Before input injection, verify **6 LOAD latest demonstration CSV**, then **7 TRAIN model on 3DS**. If model training reports insufficient examples, DO NOT force autonomous operation.
+3. Install **8 native PASS-THROUGH hook**. Drive manually on a safe part of the track. Confirm manual inputs and menu **9 diagnostics**: 30+ native callbacks, 10+ physical A frames, zero faults. Report unexpected slowdown or crashes.
+4. Perform **10 five-second SAFETY dry run**, resume MK7 early and let it FINISH. Repeat and press physical B to ABORT. Check both dry-run/B-abort flags YES/YES.
+5. **STOP, send photos** of model and native calibration diagnostics. This separates hardware read-only validation from first sustained experimental write. The first AI autonomous attempt is not yet hardware validated. Only after calibration review, reset stationary near the original demonstration's start (within 65 game-coordinate units) and continue under supervision.
+6. Choose **11 START supervised AI attempt**, close CTRPF, unpause game early in five-second countdown, release A/B/START and center Circle Pad for final 350ms. It will fail open on timeout/override or re-opened menu. **Do not leave the console unattended.** If anything behaves unusually, close MK7 and disable 3GX loader.
+7. After attempt finishes, open **14 AI attempt reports**. Each trial is retained. Press **15 SAVE ALL attempt CSV files** after playing (never while driving), copy them from `SD:/CollieKart/` to analyze. Run up to 6 attempts before having to save and clear the batch. Use **16 CLEAR saved attempt batch** to continue with same trained policy in another session.
+8. **12 CHANGE max AI duration** cycles bounded horizons 12 / 30 / 75 / 120 seconds; start with 12 seconds only.
 
-## Remaining limitations
-- The five-second countdown exists to allow returning to gameplay; it is not evidence the memory addresses are correct.
-- Actual driving actions during the countdown are intentionally not recorded.
-- The 20Hz sample target is not guaranteed; only valid samples and effective rate can establish it.
-- Travel heading is derived from successive positions, not the kart's true forward yaw.
-- No new learning or control capability in this debugging build.
+## Diagnostic columns
+Each saved attempt has a metadata row with attempt number, stop reason, steering correction gain, score, percentage of demo route completed, mean and maximum deviation, native controller delivery totals, model version and weights. The detailed timeline includes timestamp, observed position/speed, matched waypoint, target point, route error, heading error, policy-predicted steering, actual commanded steering/buttons/stick, and cumulative successfully injected native callback frames.
+
+## Honest limitations
+- **No reliable true vehicle-facing yaw** has yet been calibrated. Travel heading comes from position deltas (inaccurate when stationary/reversing/drifting).
+- Only USA Title ID and candidate telemetry are verified by software; version and offline mode are **not actively enforced**. User must restrict to MK7 USA Rev2 offline Time Trial.
+- Model may fail to generalize outside demonstration. Output of an on-device training routine does not imply route replication succeeds.
+- If the hook freezes completely, no plugin code can guarantee escape. Restore P006.4 if any issue.
+- An attempt's higher score is evidence within these metrics only; it does not prove the policy learnt a robust driving skill.
