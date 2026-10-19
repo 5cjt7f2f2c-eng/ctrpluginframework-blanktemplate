@@ -57,6 +57,24 @@ struct AiAttempt
 AiAttempt g_aiAttempts[AI_MAX_ATTEMPTS];
 unsigned g_aiCount=0;
 AiPhase g_aiPhase=AI_IDLE;
+// Explicit startup trace: aborts before first driving tick must not
+// disappear behind "0 attempts" and an inaccurate IDLE label.
+unsigned g_aiQueuedTotal=0,g_aiStartedTotal=0,g_aiDeniedTotal=0;
+unsigned g_aiLastStopReason=AI_NONE;
+const char *g_aiLastStartStep="NOT QUEUED";
+const char *g_aiLastDenial="NONE";
+unsigned g_aiNeutralResets=0;
+const char *AiPhaseName(AiPhase v)
+{
+    switch(v)
+    {
+        case AI_IDLE:return "IDLE";
+        case AI_COUNTDOWN:return "COUNTDOWN";
+        case AI_RUNNING:return "DRIVING";
+        case AI_ENDED:return "ENDED";
+        default:return "UNKNOWN";
+    }
+}
 u64 g_aiLastTick=0, g_aiStartAt=0, g_aiMenuClosedAt=0, g_aiNeutralAt=0;
 u32 g_aiLimitMs=12000;
 float g_aiWeights[4]={0,0,0,0};
@@ -259,6 +277,11 @@ void AiStop(unsigned reason)
     g_aiDeadlineMs.store(0,std::memory_order_release);
     if(g_aiPhase!=AI_COUNTDOWN && g_aiPhase!=AI_RUNNING)
         return;
+    g_aiLastStopReason=reason;
+    if(g_aiPhase==AI_COUNTDOWN && reason==AI_MENU)
+        g_aiLastStartStep="MENU REOPENED BEFORE DRIVING";
+    if(g_aiPhase==AI_COUNTDOWN && reason==AI_PHYSICAL)
+        g_aiLastStartStep="PHYSICAL B ABORTED COUNTDOWN";
     if(g_aiPhase==AI_RUNNING && g_aiCount<AI_MAX_ATTEMPTS)
     {
         AiAttempt &a=g_aiAttempts[g_aiCount];
@@ -305,6 +328,8 @@ void AiQueueAttempt(MenuEntry *)
        g_aiPhase==AI_COUNTDOWN || g_aiPhase==AI_RUNNING ||
        g_aiCount>=AI_MAX_ATTEMPTS)
     {
+        ++g_aiDeniedTotal;
+        g_aiLastDenial="TRAINING / READY / SLOT REQUIREMENT";
         MessageBox("AI attempt locked",
           "Need READY, trained demo, idle recorders and a free attempt slot.")();
         return;
@@ -314,6 +339,8 @@ void AiQueueAttempt(MenuEntry *)
        g_nativeWriteFailures!=0 || g_aiActuatorFaults!=0 ||
        !g_dryRunComplete || !g_physicalAbortVerified)
     {
+        ++g_aiDeniedTotal;
+        g_aiLastDenial="ACTUATOR PREFLIGHT";
         MessageBox("AI actuator not yet certified",
             "Install PASS-THROUGH hook, manually test A, complete the"
             " five-second safety dry run, separately abort with physical B,"
@@ -327,6 +354,8 @@ void AiQueueAttempt(MenuEntry *)
        !ReadNumber(g_vehicleAddress+0xF2C,speed) ||
        std::fabs(speed)>0.35f)
     {
+        ++g_aiDeniedTotal;
+        g_aiLastDenial="INITIAL OBSERVATION OR SPEED";
         MessageBox("Invalid AI starting position",
             "Park stationary on the ground near the recorded start.")();
         return;
@@ -335,6 +364,8 @@ void AiQueueAttempt(MenuEntry *)
     const float dz=g_observation.z-g_demoSamples[0].z;
     if(dx*dx+dz*dz>AI_MAX_START_DIST*AI_MAX_START_DIST)
     {
+        ++g_aiDeniedTotal;
+        g_aiLastDenial="TOO FAR FROM DEMO START";
         MessageBox("Too far from demonstration start",
             "Bring kart within about 65 game-coordinate units of"
             " the original starting point. No controls changed.")();
@@ -343,6 +374,11 @@ void AiQueueAttempt(MenuEntry *)
     g_aiMenuClosedAt=g_aiNeutralAt=0;
     g_aiStartAt=g_aiLastTick=0;
     g_aiPrevValid=false;g_aiCursor=0;g_aiBadObservations=0;
+    g_aiNeutralResets=0;
+    g_aiLastStartStep="QUEUED: CLOSE CTRPF";
+    g_aiLastDenial="NONE";
+    g_aiLastStopReason=AI_NONE;
+    ++g_aiQueuedTotal;
     g_aiAuthority.store(false);
     g_aiPhysicalOverride.store(0);
     g_aiPhase=AI_COUNTDOWN;
@@ -377,26 +413,73 @@ void AiStep(u64 now,bool menuOpen)
     if(!g_ready) {AiStop(AI_MASTER_OFF);return;}
     if(g_aiPhase==AI_COUNTDOWN)
     {
-        if(!g_aiMenuClosedAt) g_aiMenuClosedAt=now;
+        if(!g_aiMenuClosedAt)
+        {
+            g_aiMenuClosedAt=now;
+            g_aiLastStartStep="COUNTDOWN RUNNING";
+        }
         if(now<g_aiMenuClosedAt) {AiStop(AI_BAD_START);return;}
         if(Controller::IsKeyDown(Key::B)) {AiStop(AI_PHYSICAL);return;}
         const u64 elapsed=now-g_aiMenuClosedAt;
+        // Prevent infinite neutral-wait if the game is paused or
+        // some physical control never returns to center.
+        if(elapsed>12000)
+        {
+            g_aiLastStartStep="NEUTRAL RELEASE TIMEOUT (>12S)";
+            AiStop(AI_BAD_START);
+            return;
+        }
         if(elapsed<AI_MENU_GRACE_MS-AI_NEUTRAL_MS) return;
+        g_aiLastStartStep="CHECKING PHYSICAL NEUTRAL";
         const u32 blocked=static_cast<u32>(Key::A) |
              static_cast<u32>(Key::B)|static_cast<u32>(Key::Start)|
              static_cast<u32>(Key::CPadLeft)|static_cast<u32>(Key::CPadRight);
-        if(Controller::GetKeysDown(false)&blocked) {g_aiNeutralAt=0;return;}
+        if(Controller::GetKeysDown(false)&blocked)
+        {
+            g_aiNeutralAt=0;
+            ++g_aiNeutralResets;
+            g_aiLastStartStep="PHYSICAL BUTTON/STICK STILL HELD";
+            return;
+        }
         if(!g_aiNeutralAt)g_aiNeutralAt=now;
         if(elapsed<AI_MENU_GRACE_MS ||
            now-g_aiNeutralAt<AI_NEUTRAL_MS) return;
+        g_aiLastStartStep="VALIDATING LIVE RACE STATE";
         Probe();
         float speed=0;
         u32 pad=0;u8 paused=1;
-        if(!g_observation.candidate || !g_vehicleAddress ||
-           !ReadNumber(g_vehicleAddress+0xF2C,speed) ||
-           !ReadPointer(g_vehicleAddress+0xE0,pad) ||
-           !Process::Read8(pad+0x3D,paused) || paused ||
-           std::fabs(speed)>0.5f) {AiStop(AI_BAD_START);return;}
+        if(!g_observation.candidate || !g_vehicleAddress)
+        {
+            g_aiLastStartStep="NO VALID PLAYER OBSERVATION";
+            AiStop(AI_BAD_START);return;
+        }
+        if(!ReadNumber(g_vehicleAddress+0xF2C,speed))
+        {
+            g_aiLastStartStep="SPEED MEMORY READ FAILED";
+            AiStop(AI_BAD_START);return;
+        }
+        if(!ReadPointer(g_vehicleAddress+0xE0,pad))
+        {
+            g_aiLastStartStep="PLAYER PAD POINTER INVALID";
+            AiStop(AI_BAD_START);return;
+        }
+        if(!Process::Read8(pad+0x3D,paused))
+        {
+            g_aiLastStartStep="PLAYER PAUSE FLAG READ FAILED";
+            AiStop(AI_BAD_START);return;
+        }
+        if(paused)
+        {
+            g_aiLastStartStep="MK7 STILL PAUSED AT LAUNCH";
+            AiStop(AI_BAD_START);return;
+        }
+        if(std::fabs(speed)>0.5f)
+        {
+            g_aiLastStartStep="KART MOVING DURING ARM";
+            AiStop(AI_BAD_START);return;
+        }
+        g_aiLastStartStep="RACE VALIDATED: AI STARTED";
+        ++g_aiStartedTotal;
         g_nativePlayerPad.store(pad);
         g_aiPhase=AI_RUNNING;
         AiAttempt &a=g_aiAttempts[g_aiCount];
@@ -518,14 +601,21 @@ void AiAttemptReport(MenuEntry *)
         "MSE: %.4f | Best gain: %.2f\n"
         "Attempts stored: %u/%u | next gain: %.2f\n"
         "Current: %s | max runtime: %lus\n"
+        "Queued/started/denied: %u/%u/%u\n"
+        "Last attempt stop: %s\n"
+        "Last startup step: %s\n"
+        "Last queue denial: %s\n"
+        "Neutral reset waits: %u\n"
         "Native synthetic frames: %lu | faults: %lu\n"
         "Manual override: %s | release: %lu\n"
         "Latest trial metrics:\n",
         g_aiTrained?"YES":"NO",g_aiPolicyVersion,g_aiTrainingPoints,
         g_aiTrainingMSE,g_aiBestGain,g_aiCount,AI_MAX_ATTEMPTS,
-        g_aiNextGain,g_aiPhase==AI_RUNNING?"DRIVING":
-        g_aiPhase==AI_COUNTDOWN?"COUNTDOWN":"IDLE",
+        g_aiNextGain,AiPhaseName(g_aiPhase),
         static_cast<unsigned long>(g_aiLimitMs/1000),
+        g_aiQueuedTotal,g_aiStartedTotal,g_aiDeniedTotal,
+        AiEndName(g_aiLastStopReason),g_aiLastStartStep,
+        g_aiLastDenial,g_aiNeutralResets,
         static_cast<unsigned long>(g_aiActuatorFrames.load()),
         static_cast<unsigned long>(g_aiActuatorFaults.load()),
         g_aiPhysicalOverride.load()?"YES":"NO",
@@ -544,7 +634,8 @@ void AiAttemptReport(MenuEntry *)
             a.saved?"SAVED":"UNSAVED");
         result+=row;
     }
-    if(!g_aiCount)result+="\nNo AI attempts completed yet.";
+    if(!g_aiCount)
+        result+="\nNo driving data retained yet. Check startup fields above.";
     MessageBox("P007b Multi-Attempt Learning Report",result)();
 }
 bool AiSaveAttempt(AiAttempt &a)
