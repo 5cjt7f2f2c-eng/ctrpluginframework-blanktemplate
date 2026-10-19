@@ -801,10 +801,10 @@ namespace CTRPluginFramework
             u8 padPaused = 1;
             if (!ReadPointer(g_vehicleAddress + 0xE0, pad) ||
                 !Process::Read32(pad + 0x1C, padFrameWord) ||
-                !Process::Read8(pad + 0x3D, padPaused) || padPaused)
+                !Process::Read8(pad + 0x3D, padPaused))
             {
                 MessageBox("P006.3a hook locked",
-                    "Invalid or paused player pad. Do not install hook.")();
+                    "Invalid player pad. Do not install hook.")();
                 return;
             }
             const u32 found = FindInputFunction();
