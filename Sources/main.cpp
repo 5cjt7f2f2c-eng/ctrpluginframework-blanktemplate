@@ -238,7 +238,10 @@ namespace CTRPluginFramework
         DemoFrame g_demoSamples[MAX_DEMO_SAMPLES];
         DemoWaypoint g_demoWaypoints[MAX_DEMO_WAYPOINTS];
         unsigned g_demoCount = 0, g_demoWaypointsCount = 0;
-        unsigned g_demoReadFails = 0, g_demoGapStops = 0;
+        unsigned g_demoReadFails = 0, g_demoReadFaultTotal = 0;
+        unsigned g_demoPauseWaits = 0, g_demoGapStops = 0;
+        u32 g_demoLastFault = 0, g_demoFirstFault = 0;
+        u64 g_demoActiveAt = 0;
         unsigned g_demoHeadingCount = 0, g_demoLeftFrames = 0;
         unsigned g_demoRightFrames = 0, g_demoAFrames = 0, g_demoBFrames = 0;
         unsigned g_demoMaxGapMs = 0, g_demoMissedIntervals = 0;
@@ -1278,116 +1281,135 @@ namespace CTRPluginFramework
         }
 
 
-        // P007a: single bounded 20Hz target demonstration stream.
-        // This path NEVER patches MK7 memory or invokes native actuation.
+        // P007a.1: distinguish pause and transition from actual read errors.
+        const char *DemoFaultName(u32 r)
+        {
+            switch(r) {
+                case 0: return "NONE";
+                case 1: return "OBSERVATION";
+                case 2: return "KART PTR";
+                case 3: return "VEHICLE PTR";
+                case 4: return "POS X";
+                case 5: return "POS Y";
+                case 6: return "POS Z";
+                case 7: return "LAP";
+                case 8: return "CHECKPOINT";
+                case 9: return "SPEED";
+                case 10: return "PAD PTR";
+                case 11: return "PAUSE FLAG READ";
+                case 12: return "WAIT UNPAUSE";
+                case 13: return "BUTTONS";
+                case 14: return "STICK X";
+                case 15: return "PAUSED >10S";
+                case 16: return "READ ERROR >2.5S";
+                case 17: return "CLOCK";
+                case 18: return "PATH DISCONTINUITY";
+                default: return "OTHER";
+            }
+        }
+        void DemoStopFault(u32 reason)
+        {
+            g_demoRecording = false;
+            g_demoComplete = g_demoCount > 0;
+            g_demoStoppedOnFault = true;
+            g_demoLastFault = reason;
+        }
+        void DemoReject(u32 reason, u64 now, bool paused = false)
+        {
+            if (!g_demoFirstFault) g_demoFirstFault = reason;
+            g_demoLastFault = reason;
+            if (paused)
+            {
+                ++g_demoPauseWaits;
+                g_demoReadFails = 0;
+                if (g_demoActiveAt && now >= g_demoActiveAt &&
+                    now - g_demoActiveAt > 10000)
+                    DemoStopFault(15);
+                return;
+            }
+            ++g_demoReadFaultTotal;
+            ++g_demoReadFails;
+            // Initial menu/game transition may transiently invalidate a pad.
+            if (g_demoActiveAt && now >= g_demoActiveAt &&
+                now - g_demoActiveAt >= 2500 && g_demoReadFails >= 9)
+                DemoStopFault(16);
+        }
         void SampleDemo(u64 now)
         {
             if (!g_demoRecording || (g_demoLastAt && now >= g_demoLastAt &&
                 now - g_demoLastAt < DEMO_INTERVAL_MS))
                 return;
             if (g_demoCount >= MAX_DEMO_SAMPLES)
-            {
-                g_demoRecording = false;
-                g_demoComplete = true;
-                return;
-            }
-            if (g_demoLastAt && now < g_demoLastAt)
-            {
-                g_demoRecording = false;
-                g_demoComplete = true;
-                g_demoStoppedOnFault = true;
-                return;
-            }
+            { g_demoRecording = false; g_demoComplete = true; return; }
+            if (!g_demoActiveAt) g_demoActiveAt = now;
+            if ((g_demoLastAt && now < g_demoLastAt) || now < g_demoActiveAt)
+            { DemoStopFault(17); return; }
             if (g_demoLastAt)
             {
                 const u64 gap = now - g_demoLastAt;
                 if (gap > g_demoMaxGapMs)
                     g_demoMaxGapMs = static_cast<unsigned>(gap);
-                if (gap > 150)
-                    ++g_demoMissedIntervals;
+                if (gap > 150) ++g_demoMissedIntervals;
             }
             g_demoLastAt = now;
-
             float x = 0, y = 0, z = 0, speed = 0;
-            u32 pad = 0;
+            u32 pad = 0, lap = 0;
             u16 buttons = 0;
-            u8 stick = 7, paused = 1, cp = 0;
-            u32 lap = 0;
-            if (!g_observation.candidate || !g_demoKartAddress ||
-                !g_vehicleAddress ||
-                !ReadNumber(g_demoKartAddress + 0x28, x) ||
-                !ReadNumber(g_demoKartAddress + 0x2C, y) ||
-                !ReadNumber(g_demoKartAddress + 0x30, z) ||
-                !ReadWord(g_demoKartAddress + 0x1C, lap) || lap > 9 ||
-                !Process::Read8(g_demoKartAddress + 0x0D, cp) ||
-                !ReadNumber(g_vehicleAddress + 0xF2C, speed) ||
-                speed < -20.0f || speed > 500.0f ||
-                !ReadPointer(g_vehicleAddress + 0xE0, pad) ||
-                !Process::Read8(pad + 0x3D, paused) ||
-                !Process::Read16(pad + 0x1C, buttons) ||
-                !Process::Read8(pad + 0x1E, stick) ||
-                paused || stick > 14)
-            {
-                ++g_demoReadFails;
-                // Stop rather than continue with possibly stale game pointers.
-                if (g_demoReadFails > 8)
-                {
-                    g_demoRecording = false;
-                    g_demoComplete = g_demoCount > 0;
-                    g_demoStoppedOnFault = true;
-                }
-                return;
-            }
-            // Reset consecutive errors but retain total error count separately.
+            u8 stick = 7, pause = 1, cp = 0;
+            if (!g_observation.candidate) { DemoReject(1,now); return; }
+            if (!g_demoKartAddress) { DemoReject(2,now); return; }
+            if (!g_vehicleAddress) { DemoReject(3,now); return; }
+            if (!ReadNumber(g_demoKartAddress+0x28,x)) { DemoReject(4,now); return; }
+            if (!ReadNumber(g_demoKartAddress+0x2C,y)) { DemoReject(5,now); return; }
+            if (!ReadNumber(g_demoKartAddress+0x30,z)) { DemoReject(6,now); return; }
+            if (!ReadWord(g_demoKartAddress+0x1C,lap) || lap>9)
+            { DemoReject(7,now); return; }
+            if (!Process::Read8(g_demoKartAddress+0x0D,cp))
+            { DemoReject(8,now); return; }
+            if (!ReadNumber(g_vehicleAddress+0xF2C,speed) ||
+                speed<-20.0f || speed>500.0f)
+            { DemoReject(9,now); return; }
+            if (!ReadPointer(g_vehicleAddress+0xE0,pad))
+            { DemoReject(10,now); return; }
+            if (!Process::Read8(pad+0x3D,pause))
+            { DemoReject(11,now); return; }
+            if (pause) { DemoReject(12,now,true); return; }
+            if (!Process::Read16(pad+0x1C,buttons))
+            { DemoReject(13,now); return; }
+            if (!Process::Read8(pad+0x1E,stick) || stick>14)
+            { DemoReject(14,now); return; }
             g_demoReadFails = 0;
-
-            // Time starts at first VALID gameplay sample, not while
-            // CTRPF menu is still open following START selection.
-            if (g_demoCount == 0)
-                g_demoStartAt = now;
+            g_demoLastFault = 0;
+            if (g_demoCount == 0) g_demoStartAt = now;
             DemoFrame &d = g_demoSamples[g_demoCount];
             d.tMs = static_cast<u32>(now - g_demoStartAt);
-            d.x = x; d.y = y; d.z = z; d.speed = speed;
-            d.buttons = buttons; d.stickX = stick;
-            d.lap = static_cast<u8>(lap + 1); d.checkpoint = cp;
-            d.headingValid = false;
-            d.movementHeading = 0.0f;
+            d.x=x; d.y=y; d.z=z; d.speed=speed;
+            d.buttons=buttons; d.stickX=stick;
+            d.lap=static_cast<u8>(lap+1); d.checkpoint=cp;
+            d.headingValid=false; d.movementHeading=0.0f;
             if (g_demoCount > 0)
             {
-                const DemoFrame &prev = g_demoSamples[g_demoCount - 1];
-                const float dx = d.x - prev.x, dz = d.z - prev.z;
-                const float sq = dx * dx + dz * dz;
-                // A large discontinuity indicates a scene reset, teleport
-                // or invalid cached pointer: preserve RAM and stop.
-                if (!std::isfinite(sq) || sq > 250000.0f ||
-                    d.tMs <= prev.tMs || d.tMs - prev.tMs > 2000)
+                const DemoFrame &prev=g_demoSamples[g_demoCount-1];
+                const float dx=d.x-prev.x, dz=d.z-prev.z;
+                const float sq=dx*dx+dz*dz;
+                if (!std::isfinite(sq) || sq>250000.0f ||
+                    d.tMs<=prev.tMs || d.tMs-prev.tMs>2000)
+                { DemoStopFault(18); ++g_demoGapStops; return; }
+                if (sq>=0.04f)
                 {
-                    g_demoRecording = false;
-                    g_demoComplete = true;
-                    g_demoStoppedOnFault = true;
-                    ++g_demoGapStops;
-                    return;
+                    d.movementHeading=std::atan2(dz,dx);
+                    d.headingValid=true; ++g_demoHeadingCount;
+                    g_demoDistance+=std::sqrt(sq);
                 }
-                if (sq >= 0.04f)
-                {
-                    d.movementHeading = std::atan2(dz, dx);
-                    d.headingValid = true;
-                    ++g_demoHeadingCount;
-                    g_demoDistance += std::sqrt(sq);
-                }
-                else
-                    d.movementHeading = prev.movementHeading;
+                else d.movementHeading=prev.movementHeading;
             }
-            if (buttons & 0x1) ++g_demoAFrames;
-            if (buttons & 0x2) ++g_demoBFrames;
-            if (stick < 6) ++g_demoLeftFrames;
-            if (stick > 8) ++g_demoRightFrames;
+            if (buttons&1) ++g_demoAFrames;
+            if (buttons&2) ++g_demoBFrames;
+            if (stick<6) ++g_demoLeftFrames;
+            if (stick>8) ++g_demoRightFrames;
             ++g_demoCount;
-            if (g_demoCount >= MAX_DEMO_SAMPLES)
-            {
-                g_demoRecording = false;
-                g_demoComplete = true;
-            }
+            if (g_demoCount>=MAX_DEMO_SAMPLES)
+            { g_demoRecording=false; g_demoComplete=true; }
         }
 
         // Downsample the sampled path into a sequence the later controller
@@ -1448,7 +1470,9 @@ namespace CTRPluginFramework
                 return;
             }
             g_demoCount = g_demoWaypointsCount = 0;
-            g_demoReadFails = g_demoGapStops = g_demoMissedIntervals = 0;
+            g_demoReadFails = g_demoReadFaultTotal = g_demoPauseWaits = 0;
+            g_demoGapStops = g_demoMissedIntervals = 0;
+            g_demoLastFault = g_demoFirstFault = 0; g_demoActiveAt = 0;
             g_demoHeadingCount = g_demoLeftFrames = g_demoRightFrames = 0;
             g_demoAFrames = g_demoBFrames = g_demoMaxGapMs = 0;
             g_demoDistance = g_demoFinalDisplacement = 0;
@@ -1601,7 +1625,9 @@ namespace CTRPluginFramework
             // Explicit menu command; never automatically delete unsaved RAM.
             g_demoCount = g_demoWaypointsCount = 0;
             g_demoComplete = g_demoAnalyzed = g_demoStoppedOnFault = false;
-            g_demoReadFails = g_demoGapStops = g_demoMissedIntervals = 0;
+            g_demoReadFails = g_demoReadFaultTotal = g_demoPauseWaits = 0;
+            g_demoGapStops = g_demoMissedIntervals = 0;
+            g_demoLastFault = g_demoFirstFault = 0; g_demoActiveAt = 0;
             g_demoHeadingCount = g_demoLeftFrames = g_demoRightFrames = 0;
             g_demoAFrames = g_demoBFrames = g_demoMaxGapMs = 0;
             g_demoDistance = g_demoFinalDisplacement = 0;
