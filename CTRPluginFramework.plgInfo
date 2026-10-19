@@ -3,21 +3,23 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 10
+    Revision: 11
 
 Targets:
 
-Title: Collie Kart Portable P006.3a
+Title: Collie Kart Portable P006.3b
 
-Summary: MK7 PASS-THROUGH ONLY input hook and checked-read safety preflight
+Summary: MK7 opt-in one-shot 3-frame A hook after dry run and B-abort
 
 Description: |
-    P006.3a validates real-device game-frame interception with no
-    artificial input. The original MK7 controller processing always runs.
-    Read-checked pad inspection, atomic callback telemetry and READY-off
-    hook uninstall reduce risk; P006.2 remains the tested fallback.
-    It does NOT drive, inject buttons, or train an AI.
-    Hook safety and USA Rev2 compatibility remain hardware-UNVERIFIED.
+    P006.3b builds on hardware-tested P006.3a native pass-through.
+    An optional native A pulse requires successful manual-A calibration,
+    completed five-second dry run and separate physical B abort,
+    and another 5s neutral-input countdown. Up to three frames,
+    one pulse trial per game session, 350ms timeout and atomic
+    cancellation. Never used by default or for online races.
+    No autonomous racing or HID injection. Actuator UNTESTED on 3DS.
+    P006.3a and P006.2 remain stable fallbacks.
 
 Compatibility: Any
 
