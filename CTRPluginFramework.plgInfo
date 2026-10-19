@@ -3,13 +3,13 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 17
+    Revision: 18
 
 Targets:
 
-Title: Collie Kart P007b.1
+Title: Collie Kart P007b.2
 
-Summary: On-device demonstration learner and six-attempt session recorder
+Summary: Endpoint-aware stopping, route-progress scoring and six-attempt recorder
 
 Description: |
     Experimental supervised Mario Kart 7 USA Rev2 imitation driver.
