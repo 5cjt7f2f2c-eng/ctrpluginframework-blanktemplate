@@ -162,9 +162,45 @@ namespace CTRPluginFramework
         std::atomic<u32> g_nativeLastFrameMs{0};
         std::atomic<u32> g_nativeReleaseFrames{0}, g_nativeInjectedFrames{0};
         std::atomic<u32> g_nativeWriteFailures{0};
-        unsigned g_nativePulseTrials = 0; // one experiment per game session
-        constexpr u32 NATIVE_PULSE_MAX_FRAMES = 3;
-        constexpr u32 NATIVE_FRAME_TIMEOUT_MS = 350;
+        // P006.4: one controlled hardware attempt per action each session.
+        enum NativeAction : u32 { TEST_NONE = 0, TEST_THROTTLE = 1,
+            TEST_LEFT = 2, TEST_RIGHT = 3, TEST_REVERSE = 4 };
+        std::atomic<u32> g_nativeAction{TEST_NONE};
+        std::atomic<u32> g_nativeAttemptMask{0};
+        std::atomic<u32> g_nativeLastStick{7};
+        unsigned g_nativePulseTrials = 0;
+        float g_nativeSpeedBefore = 0.0f, g_nativeSpeedAfter = 0.0f;
+        constexpr u32 NATIVE_FRAME_TIMEOUT_MS = 350; // legacy constant
+        const char *NativeActionName(u32 a)
+        {
+            switch (a) {
+                case TEST_THROTTLE: return "THROTTLE";
+                case TEST_LEFT: return "STEER LEFT";
+                case TEST_RIGHT: return "STEER RIGHT";
+                case TEST_REVERSE: return "REVERSE";
+                default: return "NONE";
+            }
+        }
+        u32 ActionFrameLimit(u32 a)
+        {
+            switch (a) {
+                case TEST_THROTTLE: return 18;   // ~0.3s at 60 fps
+                case TEST_LEFT:
+                case TEST_RIGHT: return 36;      // ~0.6s at 60 fps
+                case TEST_REVERSE: return 90;    // ~1.5s at 60 fps
+                default: return 0;
+            }
+        }
+        u32 ActionTimeoutMs(u32 a)
+        {
+            switch (a) {
+                case TEST_THROTTLE: return 700;
+                case TEST_LEFT:
+                case TEST_RIGHT: return 1100;
+                case TEST_REVERSE: return 2300;
+                default: return 0;
+            }
+        }
 
         struct Observation
         {
@@ -701,8 +737,9 @@ namespace CTRPluginFramework
 
         void Probe(); // defined below
 
-        // Original MK7 input always executes. Default is pass-through.
-        // A SINGLE separately authorized pulse may affect local-player A.
+        // P006.4: four independent one-shot actuator trials.
+        // Every callback processes the ORIGINAL controller function first.
+        // Inactive always means no artificial memory writes.
         void NativeInputHook(u32 inputer)
         {
             HookContext::GetCurrent().OriginalFunction<void>(inputer);
@@ -710,9 +747,8 @@ namespace CTRPluginFramework
                 inputer < 0x00100000 || inputer > 0x3FFF0000 ||
                 !g_nativePlayerPad.load(std::memory_order_acquire))
                 return;
-
             u32 pad = 0, frame = 0;
-            u8 paused = 1;
+            u8 paused = 1, stickX = 7;
             u16 physical = 0;
             if (!Process::Read32(inputer + 0x20, pad) ||
                 !Process::Read32(inputer + 0x1C, frame))
@@ -721,10 +757,11 @@ namespace CTRPluginFramework
                 return;
             }
             if (pad != g_nativePlayerPad.load(std::memory_order_acquire))
-                return;
+                return; // Not the local human kart; never modify CPU pads.
             if (pad > 0x3FFF0000 - 0x3D || frame != pad + 0x1C ||
                 !Process::Read8(pad + 0x3D, paused) ||
-                !Process::Read16(frame, physical))
+                !Process::Read16(frame, physical) ||
+                !Process::Read8(frame + 2, stickX))
             {
                 ++g_nativeReadFailures;
                 return;
@@ -740,34 +777,37 @@ namespace CTRPluginFramework
             const u32 state = g_nativePulseState.load(std::memory_order_acquire);
             if (state == 2)
             {
-                // The next calcInput restores the normal physical input.
-                if (!(physical & 0x0001) && g_nativeReleaseFrames.load() < 12)
+                // Count actual original-input frames after the commanded run.
+                // Both synthetic button and stick must have been released.
+                if (!(physical & 0x0003) && stickX >= 6 && stickX <= 8 &&
+                    g_nativeReleaseFrames.load() < 12)
                     ++g_nativeReleaseFrames;
                 return;
             }
             if (state != 1)
                 return;
-
             u32 expected = 1;
-            if (static_cast<s32>(g_nativeDeadline.load() - now) < 0)
+            const u32 action = g_nativeAction.load(std::memory_order_acquire);
+            const u32 limit = ActionFrameLimit(action);
+            const u32 deadline = g_nativeDeadline.load(std::memory_order_acquire);
+            if (limit == 0 || static_cast<s32>(deadline - now) < 0)
             {
                 g_nativeAbortSignal.store(1, std::memory_order_release);
                 g_nativePulseState.compare_exchange_strong(expected, 3);
                 return;
             }
-            // MK7 input bits: A=1, B=2, START=8. B and START abort;
-            // physical A also cancels substitution rather than overwriting it.
-            if (physical & 0x000B)
+            // Any physical A/B/START overrides the test, and physical
+            // steering beyond the 6..8 neutral band cancels as well.
+            if ((physical & 0x000B) || stickX < 6 || stickX > 8)
             {
-                g_nativeAbortSignal.store((physical & 0x000A) ? 2 : 3,
-                                          std::memory_order_release);
+                g_nativeAbortSignal.store(2, std::memory_order_release);
                 g_nativePulseState.compare_exchange_strong(expected, 3);
                 return;
             }
-            // Claim a single callback. The OSD/menu may cancel by setting OFF.
             if (!g_nativePulseState.compare_exchange_strong(
                     expected, 4, std::memory_order_acq_rel))
                 return;
+
             if (!g_nativeHookEnabled.load(std::memory_order_acquire) ||
                 g_nativePlayerPad.load(std::memory_order_acquire) != pad ||
                 static_cast<s32>(g_nativeDeadline.load() -
@@ -778,15 +818,22 @@ namespace CTRPluginFramework
                 g_nativePulseState.compare_exchange_strong(expected, 3);
                 return;
             }
-            if (g_nativeInjectedFrames.load() >= NATIVE_PULSE_MAX_FRAMES)
+            const u32 count = g_nativeInjectedFrames.load();
+            if (count >= limit)
             {
                 expected = 4;
                 g_nativePulseState.compare_exchange_strong(expected, 2);
                 return;
             }
-            // Exactly one 16-bit current-frame write; no persistent pad write.
-            // A cancel cannot undo a write that is already in progress.
-            if (!Process::Write16(frame, static_cast<u16>(physical | 0x0001)))
+
+            const bool turn = action == TEST_LEFT || action == TEST_RIGHT;
+            const u8 targetStick = action == TEST_LEFT ? 2 :
+                                   action == TEST_RIGHT ? 12 : 7;
+            const u16 targetButton = action == TEST_REVERSE ? 0x0002 : 0x0001;
+
+            // Steering writes are restricted to KDPadDataOnFrame::stick_x
+            // byte +2. Zero synthetics outside a finite one-shot.
+            if (turn && !Process::Write8(frame + 2, targetStick))
             {
                 ++g_nativeWriteFailures;
                 g_nativeAbortSignal.store(4, std::memory_order_release);
@@ -794,10 +841,24 @@ namespace CTRPluginFramework
                 g_nativePulseState.compare_exchange_strong(expected, 3);
                 return;
             }
-            const u32 count = ++g_nativeInjectedFrames;
+            // Only set A for throttle/turning, or B for standstill reverse.
+            if (!Process::Write16(frame, static_cast<u16>(
+                    physical | targetButton)))
+            {
+                if (turn)
+                    Process::Write8(frame + 2, stickX); // best-effort restore
+                ++g_nativeWriteFailures;
+                g_nativeAbortSignal.store(4, std::memory_order_release);
+                expected = 4;
+                g_nativePulseState.compare_exchange_strong(expected, 3);
+                return;
+            }
+            g_nativeLastStick.store(turn ? targetStick : stickX,
+                                    std::memory_order_release);
+            const u32 written = ++g_nativeInjectedFrames;
             expected = 4;
             g_nativePulseState.compare_exchange_strong(
-                expected, count >= NATIVE_PULSE_MAX_FRAMES ? 2u : 1u,
+                expected, written >= limit ? 2u : 1u,
                 std::memory_order_acq_rel);
         }
 
