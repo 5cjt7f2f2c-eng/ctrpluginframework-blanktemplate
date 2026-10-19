@@ -701,11 +701,8 @@ namespace CTRPluginFramework
 
         void Probe(); // defined below
 
-        // MITM: original first, optionally modify only the local PLAYER pad's
-        // current game-frame input. Never intercept UI pad or steering here.
-        // If disabled, original input is returned on every frame unmodified.
-        // P006.3a PASS-THROUGH ONLY: original MK7 input always runs.
-        // Deliberately no writes to button memory or synthetic input states.
+        // Original MK7 input always executes. Default is pass-through.
+        // A SINGLE separately authorized pulse may affect local-player A.
         void NativeInputHook(u32 inputer)
         {
             HookContext::GetCurrent().OriginalFunction<void>(inputer);
@@ -714,8 +711,6 @@ namespace CTRPluginFramework
                 !g_nativePlayerPad.load(std::memory_order_acquire))
                 return;
 
-            // Checked reads instead of dereferencing unchecked raw pointers.
-            // Failure is fail-closed: simply leave physical input unchanged.
             u32 pad = 0, frame = 0;
             u8 paused = 1;
             u16 physical = 0;
@@ -725,7 +720,6 @@ namespace CTRPluginFramework
                 ++g_nativeReadFailures;
                 return;
             }
-            // Other karts' pads are expected; don't count them as failures.
             if (pad != g_nativePlayerPad.load(std::memory_order_acquire))
                 return;
             if (pad > 0x3FFF0000 - 0x3D || frame != pad + 0x1C ||
@@ -738,9 +732,73 @@ namespace CTRPluginFramework
             if (paused)
                 return;
             ++g_nativeSeenFrames;
-            g_nativeLastFrameMs = static_cast<u32>(osGetTime());
+            const u32 now = static_cast<u32>(osGetTime());
+            g_nativeLastFrameMs.store(now, std::memory_order_release);
             if (physical & 0x0001)
                 ++g_nativeManualAFrames;
+
+            const u32 state = g_nativePulseState.load(std::memory_order_acquire);
+            if (state == 2)
+            {
+                // The next calcInput restores the normal physical input.
+                if (!(physical & 0x0001) && g_nativeReleaseFrames.load() < 12)
+                    ++g_nativeReleaseFrames;
+                return;
+            }
+            if (state != 1)
+                return;
+
+            u32 expected = 1;
+            if (static_cast<s32>(g_nativeDeadline.load() - now) < 0)
+            {
+                g_nativeAbortSignal.store(1, std::memory_order_release);
+                g_nativePulseState.compare_exchange_strong(expected, 3);
+                return;
+            }
+            // MK7 input bits: A=1, B=2, START=8. B and START abort;
+            // physical A also cancels substitution rather than overwriting it.
+            if (physical & 0x000B)
+            {
+                g_nativeAbortSignal.store((physical & 0x000A) ? 2 : 3,
+                                          std::memory_order_release);
+                g_nativePulseState.compare_exchange_strong(expected, 3);
+                return;
+            }
+            // Claim a single callback. The OSD/menu may cancel by setting OFF.
+            if (!g_nativePulseState.compare_exchange_strong(
+                    expected, 4, std::memory_order_acq_rel))
+                return;
+            if (!g_nativeHookEnabled.load(std::memory_order_acquire) ||
+                g_nativePlayerPad.load(std::memory_order_acquire) != pad ||
+                static_cast<s32>(g_nativeDeadline.load() -
+                                 static_cast<u32>(osGetTime())) < 0)
+            {
+                g_nativeAbortSignal.store(1, std::memory_order_release);
+                expected = 4;
+                g_nativePulseState.compare_exchange_strong(expected, 3);
+                return;
+            }
+            if (g_nativeInjectedFrames.load() >= NATIVE_PULSE_MAX_FRAMES)
+            {
+                expected = 4;
+                g_nativePulseState.compare_exchange_strong(expected, 2);
+                return;
+            }
+            // Exactly one 16-bit current-frame write; no persistent pad write.
+            // A cancel cannot undo a write that is already in progress.
+            if (!Process::Write16(frame, static_cast<u16>(physical | 0x0001)))
+            {
+                ++g_nativeWriteFailures;
+                g_nativeAbortSignal.store(4, std::memory_order_release);
+                expected = 4;
+                g_nativePulseState.compare_exchange_strong(expected, 3);
+                return;
+            }
+            const u32 count = ++g_nativeInjectedFrames;
+            expected = 4;
+            g_nativePulseState.compare_exchange_strong(
+                expected, count >= NATIVE_PULSE_MAX_FRAMES ? 2u : 1u,
+                std::memory_order_acq_rel);
         }
 
         // Signature from MK7-Revolution src/base/pointers.cpp. All four words
