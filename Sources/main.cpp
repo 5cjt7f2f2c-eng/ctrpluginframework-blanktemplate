@@ -155,13 +155,14 @@ namespace CTRPluginFramework
         std::atomic<u32> g_nativePlayerPad{0};
         std::atomic<u32> g_nativeSeenFrames{0}, g_nativeManualAFrames{0};
         std::atomic<u32> g_nativeReadFailures{0};
-        // P006.3a has NO actuator. Counters retained for CSV compatibility.
-        volatile u32 g_nativeReleaseFrames = 0, g_nativeInjectedFrames = 0;
-        volatile u32 g_nativeAbortSignal = 0;
-        volatile u32 g_nativePulseState = 0; // 0 OFF, 1 ARMED, 2 DONE, 3 ABORT
-        volatile u32 g_nativeDeadline = 0; // u32 milliseconds (bounded to < 1s)
-        volatile u32 g_nativeLastFrameMs = 0;
-        unsigned g_nativePulseTrials = 0;
+        // State 0 OFF, 1 ARMED, 2 DONE, 3 ABORT, 4 WRITING.
+        // compare-exchange prevents a concurrent abort rearming the writer.
+        std::atomic<u32> g_nativePulseState{0};
+        std::atomic<u32> g_nativeDeadline{0}, g_nativeAbortSignal{0};
+        std::atomic<u32> g_nativeLastFrameMs{0};
+        std::atomic<u32> g_nativeReleaseFrames{0}, g_nativeInjectedFrames{0};
+        std::atomic<u32> g_nativeWriteFailures{0};
+        unsigned g_nativePulseTrials = 0; // one experiment per game session
         constexpr u32 NATIVE_PULSE_MAX_FRAMES = 3;
         constexpr u32 NATIVE_FRAME_TIMEOUT_MS = 350;
 
