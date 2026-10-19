@@ -1,34 +1,26 @@
-# Collie Kart P007b — First on-device learning + six retained attempts
+# Collie Kart P007b.1 — AI startup scheduler fix
 
-**P007b HAS NOT BEEN TESTED ON NEW 3DS HARDWARE.** Successful compilation alone does not verify autonomous driving, controller shutdown, learning, or performance. Preserve the tested P006.4 and read-only P007a.1 binaries. No online races.
+**Experimental and untested on 3DS hardware.** Built after user hardware test of P007b showed `Trained YES, v2, 88 examples, 0 attempts, 0 synthetic frames, current IDLE`.
 
-## What is implemented
-- Load the latest `/CollieKart/demo_###.csv` saved by P007a.1, or make a fresh manual demonstration.
-- Fit a four-weight regression on-device: predict recorded steering from the angle to a future sampled path point and observed speed. This is a *small supervised learner*, not a large neural network.
-- A hybrid reference-path matcher searches only forward waypoint segments, compares live position and movement direction against recorded path, predicts controls and corrects heading deviations. Model decisions use live position, not exact elapsed-time button replay.
-- Native input callback carries bounded commands, renewed every `~65ms`. Each action expires independently after 180ms if UI processing stalls. Original physical controller executes first. A/B/START or Circle Pad movement immediately revokes artificial authority at the native hook.
-- Per-action controller read/write faults, menu opening, READY-off, invalid inputs, stale position, route error above 95 coordinate units, time horizon, and physical override stop the AI.
-- Six detailed AI attempts stored together in RAM. Each has independent decision trace, route error, inputs, model parameters, score, delivery counts and stopping reason.
-- Session report compares all attempts, and `SAVE ALL ATTEMPTS` writes separate uniquely numbered `ai_attempt_###.csv` files to SD. The saved batch can then be cleared while keeping the loaded demo and best learned gain.
-- After each valid attempt the system evaluates completion and mean route error, keeps the best performing correction parameter set and proposes a nearby variation for the next attempt. This is a constrained empirical parameter search, **not proof of improving driving** until hardware outcomes are compared.
-- Record and analysis remain on the physical 3DS. No SD writes while AI is driving.
+## Definite defect corrected
+P007b invoked `AiStep()` only within a legacy telemetry condition that did **not** include `AI_COUNTDOWN` or `AI_RUNNING`. With optional telemetry, recorders and traces off, AI countdown never progressed. P007b.1 makes AI state itself activate the OSD scheduling block.
 
-## Critical hardware testing gate (start here — do not immediately run an AI attempt)
-1. **Back up P006.4 and P007a.1**, power off the New 3DS, install `CollieKart.3gx` under `SD:/luma/plugins/0004000000030800/` and start **offline Toad Circuit Time Trial only** on MK7 USA Rev2.
-2. Enable READY. Before input injection, verify **6 LOAD latest demonstration CSV**, then **7 TRAIN model on 3DS**. If model training reports insufficient examples, DO NOT force autonomous operation.
-3. Install **8 native PASS-THROUGH hook**. Drive manually on a safe part of the track. Confirm manual inputs and menu **9 diagnostics**: 30+ native callbacks, 10+ physical A frames, zero faults. Report unexpected slowdown or crashes.
-4. Perform **10 five-second SAFETY dry run**, resume MK7 early and let it FINISH. Repeat and press physical B to ABORT. Check both dry-run/B-abort flags YES/YES.
-5. **STOP, send photos** of model and native calibration diagnostics. This separates hardware read-only validation from first sustained experimental write. The first AI autonomous attempt is not yet hardware validated. Only after calibration review, reset stationary near the original demonstration's start (within 65 game-coordinate units) and continue under supervision.
-6. Choose **11 START supervised AI attempt**, close CTRPF, unpause game early in five-second countdown, release A/B/START and center Circle Pad for final 350ms. It will fail open on timeout/override or re-opened menu. **Do not leave the console unattended.** If anything behaves unusually, close MK7 and disable 3GX loader.
-7. After attempt finishes, open **14 AI attempt reports**. Each trial is retained. Press **15 SAVE ALL attempt CSV files** after playing (never while driving), copy them from `SD:/CollieKart/` to analyze. Run up to 6 attempts before having to save and clear the batch. Use **16 CLEAR saved attempt batch** to continue with same trained policy in another session.
-8. **12 CHANGE max AI duration** cycles bounded horizons 12 / 30 / 75 / 120 seconds; start with 12 seconds only.
+## Added diagnostics
+- On-screen `AI READY IN 5s` countdown and `AI DRIVING Ns` while active.
+- Report shows queued / started / denied counts, precise last startup step, most recent stop reason, queue denial category, neutral button/stick reset count.
+- The countdown cannot wait indefinitely for neutral controls; after 12 seconds it stops with a named reason.
+- Final startup checks distinguish no player observation, failed speed read, bad pad pointer, pause flag read failure, MK7 still paused, and cart moving during arming.
+- Zero attempts remains expected if a test aborts **before** AI has issued a decision; unlike P007b, the reason is now visible.
 
-## Diagnostic columns
-Each saved attempt has a metadata row with attempt number, stop reason, steering correction gain, score, percentage of demo route completed, mean and maximum deviation, native controller delivery totals, model version and weights. The detailed timeline includes timestamp, observed position/speed, matched waypoint, target point, route error, heading error, policy-predicted steering, actual commanded steering/buttons/stick, and cumulative successfully injected native callback frames.
+## Hardware test protocol: only begin supervised AI attempts after the original safety preflight
+1. Back up P006.4 and P007a.1, power off New 3DS, copy `CollieKart.3gx` to `SD:/luma/plugins/0004000000030800/`.
+2. MK7 USA Rev2 **offline Toad Circuit Time Trial**, READY on. Load demonstration CSV, TRAIN on console.
+3. Install PASS-THROUGH hook, verify 30+ local-player input callbacks, 10+ physical A input frames, **0 read/write errors**, normal manual controls.
+4. Complete 5s dry run with no injection. Repeat and physically B-abort. Confirm both flags YES/YES.
+5. Select `START supervised AI attempt` **while stopped near the recorded starting location**. Close CTRPF and unpause the game early in the visible 5s countdown. Release A/B/START, center Circle Pad before countdown ends.
+6. For first hardware AI run, keep the default **12-second limit**. Do not leave the console unattended. Any physical input or menu reopening should cancel synthetic control. If frozen, exit MK7 and disable loader.
+7. Open `AI attempt reports / startup diagnostics`. Send photos of the whole report; especially queued / started / denied, phase, last startup step, last stop reason, native synthetic frames.
+8. If a run started, save the full per-attempt CSV using `SAVE ALL`; up to 6 attempts are kept in RAM and preserved separately before clearing. **Do not assume learning has succeeded based only on synthetic frame count.**
 
-## Honest limitations
-- **No reliable true vehicle-facing yaw** has yet been calibrated. Travel heading comes from position deltas (inaccurate when stationary/reversing/drifting).
-- Only USA Title ID and candidate telemetry are verified by software; version and offline mode are **not actively enforced**. User must restrict to MK7 USA Rev2 offline Time Trial.
-- Model may fail to generalize outside demonstration. Output of an on-device training routine does not imply route replication succeeds.
-- If the hook freezes completely, no plugin code can guarantee escape. Restore P006.4 if any issue.
-- An attempt's higher score is evidence within these metrics only; it does not prove the policy learnt a robust driving skill.
+## Limits
+The new scheduler and report compiled in CI but have not been verified on hardware. The model remains a small on-device supervised regression, not a proven self-driving agent. No new control behavior was added other than running the previously implemented controller in the appropriate state; the native actuator still uses a 180ms command expiry. P006.4 is the hardware-verified fallback.
