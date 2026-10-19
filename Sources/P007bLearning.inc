@@ -120,6 +120,32 @@ bool AiLoadDemoFromCSV(const std::string &path)
     }
     g_demoCount=n;
     if(n<20) { g_demoCount=0;return false; }
+    // Rebuild the SAME statistics the live recorder accumulated.
+    // A saved CSV imported in a later game process must not inherit
+    // empty/stale counters or a zero path-distance normalizer.
+    g_demoDistance=0;
+    g_demoHeadingCount=g_demoAFrames=g_demoBFrames=0;
+    g_demoLeftFrames=g_demoRightFrames=0;
+    g_demoReadFails=g_demoReadFaultTotal=g_demoPauseWaits=0;
+    g_demoStoppedOnFault=false;
+    for(unsigned i=0;i<n;++i)
+    {
+        const DemoFrame &d=g_demoSamples[i];
+        if(d.headingValid)++g_demoHeadingCount;
+        if(d.buttons&1)++g_demoAFrames;
+        if(d.buttons&2)++g_demoBFrames;
+        if(d.stickX<6)++g_demoLeftFrames;
+        if(d.stickX>8)++g_demoRightFrames;
+        if(i)
+        {
+            const float dx=d.x-g_demoSamples[i-1].x;
+            const float dz=d.z-g_demoSamples[i-1].z;
+            const float sq=dx*dx+dz*dz;
+            if(!std::isfinite(sq)||sq>250000.0f)
+            {g_demoCount=0;return false;}
+            if(sq>=0.04f)g_demoDistance+=std::sqrt(sq);
+        }
+    }
     g_demoRecording=false;g_demoComplete=true;
     AnalyzeDemoBuffer();
     g_demoLastFile=path;
