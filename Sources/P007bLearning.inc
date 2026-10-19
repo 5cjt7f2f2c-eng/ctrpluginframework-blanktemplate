@@ -85,7 +85,7 @@ bool AiLoadDemoFromCSV(const std::string &path)
     unsigned n=0;
     char *p=buf.data(), *end=buf.data()+static_cast<unsigned>(size);
     char *newline=static_cast<char*>(std::memchr(p,'\n',end-p));
-    if (!newline || std::strncmp(p,"time_ms,pos_x,pos_y,pos_z,speed,",33)!=0)
+    if (!newline || std::strncmp(p,"time_ms,pos_x,pos_y,pos_z,speed,",32)!=0)
         return false;
     p=newline+1;
     while(p<end)
