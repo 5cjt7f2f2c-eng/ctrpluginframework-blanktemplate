@@ -1272,6 +1272,323 @@ namespace CTRPluginFramework
         }
 
 
+        // P007a: single bounded 20Hz target demonstration stream.
+        // This path NEVER patches MK7 memory or invokes native actuation.
+        void SampleDemo(u64 now)
+        {
+            if (!g_demoRecording || (g_demoLastAt && now >= g_demoLastAt &&
+                now - g_demoLastAt < DEMO_INTERVAL_MS))
+                return;
+            if (g_demoCount >= MAX_DEMO_SAMPLES)
+            {
+                g_demoRecording = false;
+                g_demoComplete = true;
+                return;
+            }
+            if (g_demoLastAt && now < g_demoLastAt)
+            {
+                g_demoRecording = false;
+                g_demoComplete = true;
+                g_demoStoppedOnFault = true;
+                return;
+            }
+            if (g_demoLastAt)
+            {
+                const u64 gap = now - g_demoLastAt;
+                if (gap > g_demoMaxGapMs)
+                    g_demoMaxGapMs = static_cast<unsigned>(gap);
+                if (gap > 150)
+                    ++g_demoMissedIntervals;
+            }
+            g_demoLastAt = now;
+
+            float x = 0, y = 0, z = 0, speed = 0;
+            u32 pad = 0;
+            u16 buttons = 0;
+            u8 stick = 7, paused = 1, cp = 0;
+            u32 lap = 0;
+            if (!g_observation.candidate || !g_demoKartAddress ||
+                !g_vehicleAddress ||
+                !ReadNumber(g_demoKartAddress + 0x28, x) ||
+                !ReadNumber(g_demoKartAddress + 0x2C, y) ||
+                !ReadNumber(g_demoKartAddress + 0x30, z) ||
+                !ReadWord(g_demoKartAddress + 0x1C, lap) || lap > 9 ||
+                !Process::Read8(g_demoKartAddress + 0x0D, cp) ||
+                !ReadNumber(g_vehicleAddress + 0xF2C, speed) ||
+                speed < -20.0f || speed > 500.0f ||
+                !ReadPointer(g_vehicleAddress + 0xE0, pad) ||
+                !Process::Read8(pad + 0x3D, paused) ||
+                !Process::Read16(pad + 0x1C, buttons) ||
+                !Process::Read8(pad + 0x1E, stick) ||
+                paused || stick > 14)
+            {
+                ++g_demoReadFails;
+                // Stop rather than continue with possibly stale game pointers.
+                if (g_demoReadFails > 8)
+                {
+                    g_demoRecording = false;
+                    g_demoComplete = g_demoCount > 0;
+                    g_demoStoppedOnFault = true;
+                }
+                return;
+            }
+            // Reset consecutive errors but retain total error count separately.
+            g_demoReadFails = 0;
+
+            DemoFrame &d = g_demoSamples[g_demoCount];
+            d.tMs = static_cast<u32>(now - g_demoStartAt);
+            d.x = x; d.y = y; d.z = z; d.speed = speed;
+            d.buttons = buttons; d.stickX = stick;
+            d.lap = static_cast<u8>(lap + 1); d.checkpoint = cp;
+            d.headingValid = false;
+            d.movementHeading = 0.0f;
+            if (g_demoCount > 0)
+            {
+                const DemoFrame &prev = g_demoSamples[g_demoCount - 1];
+                const float dx = d.x - prev.x, dz = d.z - prev.z;
+                const float sq = dx * dx + dz * dz;
+                // A large discontinuity indicates a scene reset, teleport
+                // or invalid cached pointer: preserve RAM and stop.
+                if (!std::isfinite(sq) || sq > 250000.0f ||
+                    d.tMs <= prev.tMs || d.tMs - prev.tMs > 2000)
+                {
+                    g_demoRecording = false;
+                    g_demoComplete = true;
+                    g_demoStoppedOnFault = true;
+                    ++g_demoGapStops;
+                    return;
+                }
+                if (sq >= 0.04f)
+                {
+                    d.movementHeading = std::atan2(dz, dx);
+                    d.headingValid = true;
+                    ++g_demoHeadingCount;
+                    g_demoDistance += std::sqrt(sq);
+                }
+                else
+                    d.movementHeading = prev.movementHeading;
+            }
+            if (buttons & 0x1) ++g_demoAFrames;
+            if (buttons & 0x2) ++g_demoBFrames;
+            if (stick < 6) ++g_demoLeftFrames;
+            if (stick > 8) ++g_demoRightFrames;
+            ++g_demoCount;
+            if (g_demoCount >= MAX_DEMO_SAMPLES)
+            {
+                g_demoRecording = false;
+                g_demoComplete = true;
+            }
+        }
+
+        // Downsample the sampled path into a sequence the later controller
+        // can reference. This is trajectory extraction, NOT training yet.
+        void AnalyzeDemoBuffer()
+        {
+            g_demoWaypointsCount = 0;
+            g_demoFinalDisplacement = 0;
+            if (!g_demoCount) { g_demoAnalyzed = false; return; }
+            for (unsigned i = 0; i < g_demoCount &&
+                    g_demoWaypointsCount < MAX_DEMO_WAYPOINTS; i += 5)
+            {
+                DemoWaypoint &w = g_demoWaypoints[g_demoWaypointsCount++];
+                const DemoFrame &d = g_demoSamples[i];
+                w.sourceIndex = i; w.x = d.x; w.z = d.z;
+                w.speed = d.speed; w.movementHeading = d.movementHeading;
+                w.headingValid = d.headingValid;
+            }
+            const DemoFrame &first = g_demoSamples[0];
+            const DemoFrame &last = g_demoSamples[g_demoCount - 1];
+            const float dx = last.x - first.x, dz = last.z - first.z;
+            g_demoFinalDisplacement = std::sqrt(dx * dx + dz * dz);
+            g_demoAnalyzed = true;
+        }
+
+        void StartDemo(MenuEntry *)
+        {
+            if (Process::GetTitleID() != MK7_USA || !g_ready ||
+                g_recording || g_demoRecording)
+            {
+                MessageBox("P007a demo unavailable",
+                    "Need MK7 USA, READY, and no active recorder.")();
+                return;
+            }
+            if (g_demoCount)
+            {
+                MessageBox("Existing demo in RAM",
+                    "Save or explicitly DISCARD the prior demo first.")();
+                return;
+            }
+            Probe(); // One full pointer walk; subsequent samples are lightweight.
+            if (!g_observation.candidate || !g_observation.speedValid ||
+                !g_vehicleAddress || !g_demoKartAddress)
+            {
+                MessageBox("P007a cannot record",
+                    "Start offline Time Trial and verify position/speed.")();
+                return;
+            }
+            g_demoCount = g_demoWaypointsCount = 0;
+            g_demoReadFails = g_demoGapStops = g_demoMissedIntervals = 0;
+            g_demoHeadingCount = g_demoLeftFrames = g_demoRightFrames = 0;
+            g_demoAFrames = g_demoBFrames = g_demoMaxGapMs = 0;
+            g_demoDistance = g_demoFinalDisplacement = 0;
+            g_demoLastAt = 0;
+            g_demoStartAt = osGetTime();
+            g_demoComplete = g_demoAnalyzed = g_demoStoppedOnFault = false;
+            g_demoRecording = true;
+            MessageBox("P007a MANUAL demo started",
+                "Close CTRPF and DRIVE YOURSELF. Nothing controls the kart."
+                " When finished, open menu and select STOP & ANALYZE."
+                " First test: 5-10s on a simple stretch.")();
+        }
+        void StopAnalyzeDemo(MenuEntry *)
+        {
+            g_demoRecording = false;
+            g_demoComplete = g_demoCount > 0;
+            AnalyzeDemoBuffer();
+            if (!g_demoCount)
+            {
+                MessageBox("P007a no demo",
+                    "No valid samples. See demo diagnostics.")();
+                return;
+            }
+            MessageBox("P007a recorded",
+                "Demonstration stopped and trajectory extracted in RAM."
+                " Select DEMO DIAGNOSTICS and SAVE DEMO CSV.")();
+        }
+        void DemoDiagnostics(MenuEntry *)
+        {
+            if (g_demoComplete && !g_demoAnalyzed)
+                AnalyzeDemoBuffer();
+            char msg[650];
+            const u32 duration = g_demoCount
+                ? g_demoSamples[g_demoCount - 1].tMs : 0;
+            std::snprintf(msg, sizeof(msg),
+                "State: %s%s\\n"
+                "Valid samples: %u/%u\\n"
+                "Duration: %.2f sec (target 20Hz)\\n"
+                "Mean effective rate: %.1f Hz\\n"
+                "Max gap: %u ms | gaps >150ms: %u\\n"
+                "Headings from motion: %u/%u\\n"
+                "Manual A/B: %u/%u | stick L/R: %u/%u\\n"
+                "Path length: %.1f | endpoint delta: %.1f\\n"
+                "Reference points: %u\\n"
+                "Recent consecutive read faults: %u\\n"
+                "Stopped on anomaly: %s\\n"
+                "Last demo file: %s\\n"
+                "Travel heading != actual kart yaw.",
+                g_demoRecording ? "RECORDING" :
+                    g_demoComplete ? "STOPPED" : "EMPTY",
+                g_demoAnalyzed ? " / ANALYZED" : "",
+                g_demoCount, MAX_DEMO_SAMPLES,
+                static_cast<float>(duration) / 1000.0f,
+                duration ? (g_demoCount * 1000.0f / duration) : 0.0f,
+                g_demoMaxGapMs, g_demoMissedIntervals,
+                g_demoHeadingCount, g_demoCount,
+                g_demoAFrames, g_demoBFrames,
+                g_demoLeftFrames, g_demoRightFrames,
+                g_demoDistance, g_demoFinalDisplacement,
+                g_demoWaypointsCount, g_demoReadFails,
+                g_demoStoppedOnFault ? "YES" : "NO",
+                g_demoLastFile.c_str());
+            MessageBox("P007a Demo Diagnostics", msg)();
+        }
+        void SaveDemoCSV(MenuEntry *)
+        {
+            if (g_demoRecording || !g_demoComplete || g_demoCount == 0)
+            {
+                MessageBox("Cannot save demo",
+                    "Stop & analyze a non-empty demonstration first.")();
+                return;
+            }
+            if (!g_demoAnalyzed)
+                AnalyzeDemoBuffer();
+            const std::string folder = "/CollieKart";
+            if (Directory::IsExists(folder) != 1 &&
+                Directory::Create(folder) != Directory::SUCCESS)
+            {
+                MessageBox("Demo save failed",
+                    "Could not create SD:/CollieKart. RAM preserved.")();
+                return;
+            }
+            std::string filePath;
+            char name[55];
+            for (unsigned i = 1; i <= 999; ++i)
+            {
+                std::snprintf(name, sizeof(name),
+                              "/CollieKart/demo_%03u.csv", i);
+                if (File::Exists(name) == 0) { filePath = name; break; }
+            }
+            if (filePath.empty() || File::Create(filePath) != File::SUCCESS)
+            {
+                MessageBox("Demo save failed",
+                    "No free filename, or SD create failed. RAM preserved.")();
+                return;
+            }
+            File csv;
+            if (File::Open(csv, filePath, File::WRITE | File::TRUNCATE)
+                != File::SUCCESS)
+            {
+                MessageBox("Demo save failed",
+                    "SD open failed. RAM preserved.")();
+                return;
+            }
+            bool saved = csv.WriteLine(
+                "time_ms,pos_x,pos_y,pos_z,speed,buttons,stick_x,"
+                "travel_heading_rad,heading_valid,lap,checkpoint,"
+                "reference_waypoint") == File::SUCCESS;
+            unsigned waypoint = 0;
+            char row[256];
+            for (unsigned i = 0; saved && i < g_demoCount; ++i)
+            {
+                const DemoFrame &d = g_demoSamples[i];
+                const bool reference = waypoint < g_demoWaypointsCount &&
+                    g_demoWaypoints[waypoint].sourceIndex == i;
+                if (reference) ++waypoint;
+                const int len = std::snprintf(row, sizeof(row),
+                    "%lu,%.4f,%.4f,%.4f,%.5f,%u,%u,%.6f,%d,%u,%u,%d",
+                    static_cast<unsigned long>(d.tMs),
+                    d.x, d.y, d.z, d.speed,
+                    static_cast<unsigned>(d.buttons),
+                    static_cast<unsigned>(d.stickX),
+                    d.movementHeading, d.headingValid ? 1 : 0,
+                    static_cast<unsigned>(d.lap),
+                    static_cast<unsigned>(d.checkpoint),
+                    reference ? 1 : 0);
+                if (len <= 0 || len >= static_cast<int>(sizeof(row)) ||
+                    csv.WriteLine(row) != File::SUCCESS)
+                    saved = false;
+            }
+            csv.Close();
+            if (saved)
+            {
+                g_demoLastFile = filePath;
+                MessageBox("Demo saved to SD", filePath)();
+            }
+            else
+                MessageBox("Demo save incomplete",
+                    "Check SD:/CollieKart/demo_*.csv. RAM retained."
+                    " Do not use a partial CSV for training.")();
+        }
+        void DiscardDemo(MenuEntry *)
+        {
+            if (g_demoRecording)
+            {
+                MessageBox("Stop demo first",
+                    "Use STOP & ANALYZE before discarding.")();
+                return;
+            }
+            // Explicit menu command; never automatically delete unsaved RAM.
+            g_demoCount = g_demoWaypointsCount = 0;
+            g_demoComplete = g_demoAnalyzed = g_demoStoppedOnFault = false;
+            g_demoReadFails = g_demoGapStops = g_demoMissedIntervals = 0;
+            g_demoHeadingCount = g_demoLeftFrames = g_demoRightFrames = 0;
+            g_demoAFrames = g_demoBFrames = g_demoMaxGapMs = 0;
+            g_demoDistance = g_demoFinalDisplacement = 0;
+            g_demoStartAt = g_demoLastAt = 0;
+            MessageBox("Demo RAM cleared",
+                "Previous SD files remain intact. Ready to record again.")();
+        }
+
         // At most ~10Hz based on elapsed milliseconds, not frame count.
         // Read-only: no file operations and no changes to the MK7 process.
         // Snapshot from the plugin menu does not count events or time.
