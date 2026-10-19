@@ -13,7 +13,8 @@ constexpr float AI_MAX_ROUTE_ERROR = 95.0f;
 enum AiPhase { AI_IDLE=0, AI_COUNTDOWN=1, AI_RUNNING=2, AI_ENDED=3 };
 enum AiEndReason { AI_NONE=0, AI_ROUTE_DONE=1, AI_TIME=2,
     AI_OFF_PATH=3, AI_PHYSICAL=4, AI_INPUT_FAULT=5, AI_MEMORY=6,
-    AI_MENU=7, AI_MASTER_OFF=8, AI_BUFFER=9, AI_BAD_START=10 };
+    AI_MENU=7, AI_MASTER_OFF=8, AI_BUFFER=9, AI_BAD_START=10,
+    AI_ENDPOINT_OVERSHOT=11 };
 const char *AiEndName(unsigned n)
 {
     switch(n) {
@@ -27,6 +28,7 @@ const char *AiEndName(unsigned n)
         case AI_MASTER_OFF: return "READY DISABLED";
         case AI_BUFFER: return "ATTEMPT BUFFER FULL";
         case AI_BAD_START: return "INVALID START / UNPAUSED";
+        case AI_ENDPOINT_OVERSHOT: return "FINAL APPROACH OVERSHOT";
         default: return "NONE";
     }
 }
@@ -41,8 +43,9 @@ struct AiTrace
     u32 tMs=0, delivered=0;
     float x=0,z=0,speed=0,routeX=0,routeZ=0;
     float pathError=0,angleError=0,policySteer=0,cmdSteer=0;
+    float routeProgress=0,endpointDistance=0,desiredSpeed=0;
     u16 waypoint=0,buttons=0;
-    u8 stick=7;
+    u8 stick=7,stopApproach=0;
 };
 struct AiAttempt
 {
@@ -50,6 +53,8 @@ struct AiAttempt
     unsigned count=0, reason=AI_NONE, attemptNo=0;
     u32 durationMs=0, frames=0, nativeFaults=0;
     float gain=1.0f, meanError=0,maxError=0,progress=0,score=0;
+    float closestEndpoint=1e12f,finalEndpoint=0,endSpeed=0;
+    u32 closestEndpointMs=0,finalApproachTicks=0;
     float policyWeights[4]={0,0,0,0};
     bool saved=false;
     std::string file;
@@ -86,6 +91,29 @@ unsigned g_aiCursor=0, g_aiBadObservations=0;
 float g_aiPrevX=0,g_aiPrevZ=0,g_aiHeading=0;
 bool g_aiPrevValid=false;
 u32 g_aiFrameStart=0, g_aiFaultStart=0;
+// Arc-length route progress is independent of the number of stationary
+// tail waypoints. Never let a near-zero end segment block completion.
+float g_aiRouteArc[MAX_DEMO_WAYPOINTS];
+float g_aiRouteLength=0,g_aiArcProgress=0;
+bool g_aiTerminalDemo=false,g_aiStopApproachEntered=false;
+void AiMeasureReference()
+{
+    g_aiRouteLength=0;
+    const unsigned n=g_demoWaypointsCount;
+    for(unsigned i=0;i<n;++i)
+    {
+        g_aiRouteArc[i]=g_aiRouteLength;
+        if(i+1<n)
+        {
+            const float dx=g_demoWaypoints[i+1].x-g_demoWaypoints[i].x;
+            const float dz=g_demoWaypoints[i+1].z-g_demoWaypoints[i].z;
+            const float d=std::sqrt(dx*dx+dz*dz);
+            if(std::isfinite(d))g_aiRouteLength+=d;
+        }
+    }
+    g_aiTerminalDemo=g_demoCount &&
+        std::fabs(g_demoSamples[g_demoCount-1].speed)<0.35f;
+}
 
 bool AiLoadDemoFromCSV(const std::string &path)
 {
@@ -297,9 +325,11 @@ void AiStop(unsigned reason)
                 a.maxError=a.log[i].pathError;
         }
         a.meanError=a.count?sum/a.count:0;
-        a.progress=g_demoWaypointsCount>1?
-           static_cast<float>(g_aiCursor)/(g_demoWaypointsCount-1):0;
-        if(a.progress>1)a.progress=1;
+        // Completion is measured by distance ALONG the reference,
+        // not the raw waypoint index (which contains a stationary tail).
+        a.progress=(reason==AI_ROUTE_DONE)?1.0f:
+            (a.count?a.log[a.count-1].routeProgress:0.0f);
+        a.progress=AiClamp(a.progress,0,1);
         const float scale=g_demoDistance/100.0f+1.0f;
         a.score=100*a.progress-8*a.meanError/scale-
            (reason==AI_ROUTE_DONE?0:10);
@@ -371,6 +401,17 @@ void AiQueueAttempt(MenuEntry *)
             " the original starting point. No controls changed.")();
         return;
     }
+    AiMeasureReference();
+    if(g_aiRouteLength<15.0f)
+    {
+        ++g_aiDeniedTotal;
+        g_aiLastDenial="RECORDED PATH TOO SHORT";
+        MessageBox("AI reference unusable",
+            "Need a demonstration with a valid nonzero travel route.")();
+        return;
+    }
+    g_aiArcProgress=0;
+    g_aiStopApproachEntered=false;
     g_aiMenuClosedAt=g_aiNeutralAt=0;
     g_aiStartAt=g_aiLastTick=0;
     g_aiPrevValid=false;g_aiCursor=0;g_aiBadObservations=0;
@@ -484,6 +525,8 @@ void AiStep(u64 now,bool menuOpen)
         g_aiPhase=AI_RUNNING;
         AiAttempt &a=g_aiAttempts[g_aiCount];
         a.count=0;a.reason=AI_NONE;a.saved=false;a.file.clear();
+        a.closestEndpoint=1e12f;a.closestEndpointMs=0;
+        a.finalEndpoint=0;a.endSpeed=0;a.finalApproachTicks=0;
         a.attemptNo=g_aiCount+1;a.gain=g_aiNextGain;
         for(int k=0;k<4;++k)a.policyWeights[k]=g_aiWeights[k];
         g_aiPrevValid=false;g_aiStartAt=now;g_aiLastTick=0;
