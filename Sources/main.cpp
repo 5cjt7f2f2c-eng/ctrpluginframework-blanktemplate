@@ -1341,6 +1341,10 @@ namespace CTRPluginFramework
             // Reset consecutive errors but retain total error count separately.
             g_demoReadFails = 0;
 
+            // Time starts at first VALID gameplay sample, not while
+            // CTRPF menu is still open following START selection.
+            if (g_demoCount == 0)
+                g_demoStartAt = now;
             DemoFrame &d = g_demoSamples[g_demoCount];
             d.tMs = static_cast<u32>(now - g_demoStartAt);
             d.x = x; d.y = y; d.z = z; d.speed = speed;
@@ -1394,11 +1398,22 @@ namespace CTRPluginFramework
             g_demoFinalDisplacement = 0;
             if (!g_demoCount) { g_demoAnalyzed = false; return; }
             for (unsigned i = 0; i < g_demoCount &&
-                    g_demoWaypointsCount < MAX_DEMO_WAYPOINTS; i += 5)
+                    g_demoWaypointsCount + 1 < MAX_DEMO_WAYPOINTS; i += 5)
             {
                 DemoWaypoint &w = g_demoWaypoints[g_demoWaypointsCount++];
                 const DemoFrame &d = g_demoSamples[i];
                 w.sourceIndex = i; w.x = d.x; w.z = d.z;
+                w.speed = d.speed; w.movementHeading = d.movementHeading;
+                w.headingValid = d.headingValid;
+            }
+            // Always include the demonstration endpoint.
+            if (g_demoWaypoints[g_demoWaypointsCount - 1].sourceIndex !=
+                    g_demoCount - 1)
+            {
+                const unsigned idx = g_demoCount - 1;
+                const DemoFrame &d = g_demoSamples[idx];
+                DemoWaypoint &w = g_demoWaypoints[g_demoWaypointsCount++];
+                w.sourceIndex = idx; w.x = d.x; w.z = d.z;
                 w.speed = d.speed; w.movementHeading = d.movementHeading;
                 w.headingValid = d.headingValid;
             }
@@ -1469,18 +1484,18 @@ namespace CTRPluginFramework
             const u32 duration = g_demoCount
                 ? g_demoSamples[g_demoCount - 1].tMs : 0;
             std::snprintf(msg, sizeof(msg),
-                "State: %s%s\\n"
-                "Valid samples: %u/%u\\n"
-                "Duration: %.2f sec (target 20Hz)\\n"
-                "Mean effective rate: %.1f Hz\\n"
-                "Max gap: %u ms | gaps >150ms: %u\\n"
-                "Headings from motion: %u/%u\\n"
-                "Manual A/B: %u/%u | stick L/R: %u/%u\\n"
-                "Path length: %.1f | endpoint delta: %.1f\\n"
-                "Reference points: %u\\n"
-                "Recent consecutive read faults: %u\\n"
-                "Stopped on anomaly: %s\\n"
-                "Last demo file: %s\\n"
+                "State: %s%s\n"
+                "Valid samples: %u/%u\n"
+                "Duration: %.2f sec (target 20Hz)\n"
+                "Mean effective rate: %.1f Hz\n"
+                "Max gap: %u ms | gaps >150ms: %u\n"
+                "Headings from motion: %u/%u\n"
+                "Manual A/B: %u/%u | stick L/R: %u/%u\n"
+                "Path length: %.1f | endpoint delta: %.1f\n"
+                "Reference points: %u\n"
+                "Recent consecutive read faults: %u\n"
+                "Stopped on anomaly: %s\n"
+                "Last demo file: %s\n"
                 "Travel heading != actual kart yaw.",
                 g_demoRecording ? "RECORDING" :
                     g_demoComplete ? "STOPPED" : "EMPTY",
@@ -2390,7 +2405,7 @@ namespace CTRPluginFramework
         void ToggleLive(MenuEntry *)
         {
             g_live = !g_live;
-            if (!g_recording)
+            if (!g_recording && !g_demoRecording)
             {
                 g_lastTelemetryAt = g_lastEnvironmentAt = 0;
                 g_observation = Observation();
