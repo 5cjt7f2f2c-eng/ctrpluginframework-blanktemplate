@@ -575,6 +575,7 @@ void AiStep(u64 now,bool menuOpen)
     }
     g_aiHeading=travel;g_aiPrevX=x;g_aiPrevZ=z;g_aiPrevValid=true;
     float best=1e15f;unsigned nearest=g_aiCursor;
+    float nearestT=0.0f;
     const unsigned n=g_demoWaypointsCount;
     if(n<3){AiStop(AI_MEMORY);return;}
     // Match MONOTONIC forward segments, not arbitrary closest points.
@@ -588,12 +589,46 @@ void AiStep(u64 now,bool menuOpen)
         const float t=AiClamp(((x-p.x)*vx+(z-p.z)*vz)/len,0,1);
         const float ox=x-(p.x+vx*t),oz=z-(p.z+vz*t);
         const float err=ox*ox+oz*oz;
-        if(err<best){best=err;nearest=i;}
+        if(err<best){best=err;nearest=i;nearestT=t;}
     }
     if(!std::isfinite(best) || best>AI_MAX_ROUTE_ERROR*AI_MAX_ROUTE_ERROR)
     {AiStop(AI_OFF_PATH);return;}
     g_aiCursor=nearest;
     const float distance=std::sqrt(best);
+    const DemoWaypoint &segEnd=g_demoWaypoints[nearest+1];
+    const DemoWaypoint &segStart=g_demoWaypoints[nearest];
+    const float segX=segEnd.x-segStart.x,segZ=segEnd.z-segStart.z;
+    const float segLength=std::sqrt(segX*segX+segZ*segZ);
+    const float arc=g_aiRouteArc[nearest]+nearestT*segLength;
+    const float observedProgress=g_aiRouteLength>1.0f?
+        AiClamp(arc/g_aiRouteLength,0,1):0.0f;
+    if(observedProgress>g_aiArcProgress)
+        g_aiArcProgress=observedProgress;
+    const DemoFrame &lastDemo=g_demoSamples[g_demoCount-1];
+    const float endpointDx=x-lastDemo.x, endpointDz=z-lastDemo.z;
+    const float endpointDistance=std::sqrt(
+        endpointDx*endpointDx+endpointDz*endpointDz);
+    a.finalEndpoint=endpointDistance;
+    a.endSpeed=speed;
+    const u32 elapsedMs=static_cast<u32>(now-g_aiStartAt);
+    if(endpointDistance<a.closestEndpoint)
+    {
+        a.closestEndpoint=endpointDistance;
+        a.closestEndpointMs=elapsedMs;
+    }
+    // A final-stationary demo is a DESTINATION, not a series of
+    // positional waypoints that the AI must move through.
+    // Require >80% path progress to prevent early completion on a loop.
+    if(g_aiTerminalDemo && g_aiArcProgress>=0.80f &&
+       endpointDistance<=85.0f)
+        g_aiStopApproachEntered=true;
+    const bool finalApproach=g_aiStopApproachEntered;
+    if(finalApproach && endpointDistance>110.0f &&
+       g_aiArcProgress>=0.85f)
+    {
+        AiStop(AI_ENDPOINT_OVERSHOT);
+        return;
+    }
     const unsigned look=nearest+3<n?nearest+3:n-1;
     const DemoWaypoint &target=g_demoWaypoints[look];
     const float tx=target.x-x,tz=target.z-z;
@@ -602,33 +637,67 @@ void AiStep(u64 now,bool menuOpen)
     float policy=g_aiWeights[0]+g_aiWeights[1]*aerr+
                  g_aiWeights[2]*v+g_aiWeights[3]*aerr*v;
     policy=AiClamp(policy,-0.9f,0.9f);
-    // The learned gain is empirically optimized between attempts.
+    // Learned steering plus feedback correction remains unchanged
+    // until final approach, when steering must be straightened.
     const float steer=AiClamp(policy+
-         (g_aiAttempts[g_aiCount].gain-1.0f)*aerr,-0.85f,0.85f);
+         (a.gain-1.0f)*aerr,-0.85f,0.85f);
     const int stick=static_cast<int>(std::round(steer*7.0f))+7;
-    const u8 targetStick=static_cast<u8>(AiClamp(stick,1,13));
-    const float desired=target.speed;
-    const u16 buttons=speed>desired+0.9f?0x2:0x1;
+    u8 targetStick=static_cast<u8>(AiClamp(stick,1,13));
+    float desired=target.speed;
+    u16 buttons=speed>desired+0.9f?0x2:0x1;
+    if(finalApproach)
+    {
+        ++a.finalApproachTicks;
+        // Brake as distance shrinks; do NOT alternate B with full
+        // throttle at a stationary endpoint. Don't hold B below
+        // 0.35 speed, since B can become reverse gear in MK7.
+        desired=AiClamp(endpointDistance*0.05f,0.35f,4.2f);
+        if(speed>desired+0.15f && speed>0.35f)
+            buttons=0x2;
+        else if(endpointDistance>25.0f && speed<desired-0.75f &&
+                speed>=0.0f)
+            buttons=0x1;
+        else
+            buttons=0; // neutral: coast; never creep with A near stop
+        if(endpointDistance<28.0f)
+            targetStick=7; // no late full-lock spin at the finish
+    }
     AiTrace &t=a.log[a.count++];
-    t.tMs=static_cast<u32>(now-g_aiStartAt);
+    t.tMs=elapsedMs;
     t.x=x;t.z=z;t.speed=speed;
     t.routeX=target.x;t.routeZ=target.z;
     t.pathError=distance;t.angleError=aerr;
-    t.policySteer=policy;t.cmdSteer=steer;
+    t.policySteer=policy;t.cmdSteer=finalApproach &&
+        endpointDistance<28.0f?0.0f:steer;
     t.waypoint=static_cast<u16>(nearest);
+    t.routeProgress=g_aiArcProgress;
+    t.endpointDistance=endpointDistance;
+    t.desiredSpeed=desired;
+    t.stopApproach=finalApproach?1:0;
     t.buttons=buttons;t.stick=targetStick;
     t.delivered=g_aiActuatorFrames.load()-g_aiFrameStart;
+    // Stop must be evaluated BEFORE publishing another A or B input.
+    // The last observation remains in the flight recorder.
+    if(g_aiTerminalDemo && g_aiArcProgress>=0.80f &&
+       endpointDistance<=8.0f && std::fabs(speed)<=1.2f)
+    {
+        t.buttons=0;t.stick=7;t.cmdSteer=0;
+        AiStop(AI_ROUTE_DONE);
+        return;
+    }
+    if(!g_aiTerminalDemo && g_aiArcProgress>=0.985f &&
+       endpointDistance<=12.0f)
+    {
+        t.buttons=0;t.stick=7;t.cmdSteer=0;
+        AiStop(AI_ROUTE_DONE);
+        return;
+    }
     // Atomic release order: publish command and deadline before enabling.
     g_aiCommand.store((static_cast<u32>(targetStick)<<16)|buttons,
         std::memory_order_release);
     g_aiDeadlineMs.store(static_cast<u32>(now+AI_COMMAND_EXPIRY_MS),
         std::memory_order_release);
     g_aiAuthority.store(true,std::memory_order_release);
-    const float endpointDx=x-g_demoSamples[g_demoCount-1].x;
-    const float endpointDz=z-g_demoSamples[g_demoCount-1].z;
-    if(nearest>=n-2 &&
-       endpointDx*endpointDx+endpointDz*endpointDz<35.0f*35.0f)
-       AiStop(AI_ROUTE_DONE);
 }
 void AiAbortMenu(MenuEntry *)
 {
