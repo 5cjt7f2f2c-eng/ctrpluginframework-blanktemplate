@@ -3,22 +3,22 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 13
+    Revision: 14
 
 Targets:
 
-Title: Collie Kart Portable P007a
+Title: Collie Kart Portable P007a.1
 
-Summary: Read-only manual driving demonstration recorder and waypoint analyzer
+Summary: Read-only recorder with 5-second resume grace and failure-stage diagnostics
 
 Description: |
-    P007a begins on-device imitation learning research with manual
+    P007a.1 patches a failed recorder startup with manual
     demonstration recording. A separate in-RAM recorder targets 20Hz,
     reading position, speed, game-frame buttons and stick. A compact
     reference trajectory is extracted on-device; CSV saved by explicit
     menu action after stopping. No autonomous play, model training,
     synthetic controls or native-hook installation are available
-    through the P007a menu. P006.4 is the proven hardware fallback.
+    through the P007a.1 menu. P006.4 is the proven hardware fallback.
     Travel heading is estimated from position deltas, NOT actual yaw.
 
 Compatibility: Any
