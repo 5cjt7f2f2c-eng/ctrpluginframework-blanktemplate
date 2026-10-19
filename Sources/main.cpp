@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <string>
 #include <atomic>
+#include <vector>
+#include <cstring>
 #include "CTRPluginFramework/System/Directory.hpp"
 #include "CTRPluginFramework/System/File.hpp"
 #include "CTRPluginFramework/System/Hook.hpp"
@@ -1709,6 +1711,10 @@ namespace CTRPluginFramework
                 "Previous SD files remain intact. Ready to record again.")();
         }
 
+        // P007b on-device learner is compiled inside this namespace, after
+        // P007a's demonstration and pointer-observation helpers.
+        #include "P007bLearning.inc"
+
         // At most ~10Hz based on elapsed milliseconds, not frame count.
         // Read-only: no file operations and no changes to the MK7 process.
         // Snapshot from the plugin menu does not count events or time.
@@ -2310,7 +2316,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P007a.1 READY" : "CK P007a.1 OFF",
+            screen.Draw(g_ready ? "CK P007b READY" : "CK P007b OFF",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -2381,6 +2387,7 @@ namespace CTRPluginFramework
                     ReadNativeSetterPreflight();
                 }
                 ControlStep(osGetTime(), false);
+                AiStep(osGetTime(), false);
                 if (g_demoRecording)
                 {
                     // A new demonstration begins only AFTER an independent
@@ -2397,6 +2404,8 @@ namespace CTRPluginFramework
                 if (g_recording && dueTelemetry)
                     CaptureSample();
             }
+            else if (menuOpen && g_aiPhase == AI_RUNNING)
+                AiStop(AI_MENU); // menu opening always removes authority
             // A queued test cannot silently survive losing READY or menu reopen.
             else if (g_control == COUNTDOWN || g_control == PULSE ||
                      g_control == OBSERVE)
@@ -2522,6 +2531,8 @@ namespace CTRPluginFramework
                     g_demoComplete = g_demoCount > 0;
                 }
                 g_aiAuthority.store(false, std::memory_order_release);
+                if (g_aiPhase == AI_RUNNING || g_aiPhase == AI_COUNTDOWN)
+                    AiStop(AI_MASTER_OFF);
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
             }
@@ -2778,9 +2789,9 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P007a.1", 0, 0, 1,
-            "READ-ONLY demonstration recorder + path analysis.\n"
-            "No autonomous driving or synthetic control.");
+        PluginMenu menu("Collie Kart P007b", 0, 0, 2,
+            "On-device demonstration learner + supervised AI attempts.\n"
+            "Offline MK7 USA Time Trial ONLY. Controller OFF at boot.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
@@ -2796,6 +2807,28 @@ namespace CTRPluginFramework
             "Write new SD:/CollieKart/demo_###.csv after stopping.");
         menu += new MenuEntry("5: DISCARD demo in RAM", nullptr, DiscardDemo,
             "Clears the RAM buffer only; existing SD files are untouched.");
+        menu += new MenuEntry("6: LOAD latest demonstration CSV", nullptr, AiLoadNewestDemo,
+            "Load highest-numbered SD:/CollieKart/demo_###.csv.");
+        menu += new MenuEntry("7: TRAIN model on 3DS", nullptr, AiTrain,
+            "Learn steering relationship from demonstration.");
+        menu += new MenuEntry("8: Install native PASS-THROUGH hook", nullptr, HookPassThrough,
+            "Requires READY and manual input validation first.");
+        menu += new MenuEntry("9: Native input diagnostics", nullptr, NativeHookDiagnostics,
+            "Check callbacks, manual A, and zero native faults.");
+        menu += new MenuEntry("10: 5s SAFETY dry run", nullptr, QueueDryRun,
+            "Complete one dry run; repeat and physically B-abort to certify.");
+        menu += new MenuEntry("11: START supervised AI attempt", nullptr, AiQueueAttempt,
+            "Requires trained policy and certified native actuator.");
+        menu += new MenuEntry("12: CHANGE max AI duration", nullptr, AiCycleLimit,
+            "Cycle 12, 30, 75 and 120 seconds. Always supervise.");
+        menu += new MenuEntry("13: ABORT AI attempt", nullptr, AiAbortMenu,
+            "Immediately drop artificial control authority.");
+        menu += new MenuEntry("14: AI attempt reports", nullptr, AiAttemptReport,
+            "Compare all attempts retained in RAM and model improvements.");
+        menu += new MenuEntry("15: SAVE ALL attempt CSV files", nullptr, AiSaveAll,
+            "Separate uniquely numbered CSV for each attempt, after driving.");
+        menu += new MenuEntry("16: CLEAR saved attempt batch", nullptr, AiClearSaved,
+            "Requires all attempts saved; retains loaded demo and trained model.");
         menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
             "Status of the last attempted telemetry probe.");
         menu += new MenuEntry("Read telemetry snapshot", nullptr, Snapshot,
