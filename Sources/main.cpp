@@ -719,10 +719,15 @@ namespace CTRPluginFramework
             u8 paused = 1;
             u16 physical = 0;
             if (!Process::Read32(inputer + 0x20, pad) ||
-                !Process::Read32(inputer + 0x1C, frame) ||
-                pad != g_nativePlayerPad.load(std::memory_order_acquire) ||
-                pad > 0x3FFF0000 - 0x3D ||
-                frame != pad + 0x1C ||
+                !Process::Read32(inputer + 0x1C, frame))
+            {
+                ++g_nativeReadFailures;
+                return;
+            }
+            // Other karts' pads are expected; don't count them as failures.
+            if (pad != g_nativePlayerPad.load(std::memory_order_acquire))
+                return;
+            if (pad > 0x3FFF0000 - 0x3D || frame != pad + 0x1C ||
                 !Process::Read8(pad + 0x3D, paused) ||
                 !Process::Read16(frame, physical))
             {
