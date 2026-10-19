@@ -1,4 +1,4 @@
-// Collie Kart Portable P006.3a -- safe PASS-THROUGH ONLY frame-hook preflight.
+// Collie Kart Portable P006.3b -- safe PASS-THROUGH ONLY frame-hook preflight.
 // MK7-research frame-input interception with CTRPF MITM hook. No AI/autonomy.
 // No synthetic buttons can be generated in this version.
 // The first on-device native-hook test MUST remain read-only.
@@ -145,7 +145,7 @@ namespace CTRPluginFramework
         };
         SetterPreflight g_setter;
 
-        // P006.3a: Native game-frame input path, completely DISABLED on boot.
+        // P006.3b: Native hook OFF until explicitly installed.
         // Source: MK7-Revolution KDPadInputer::calcInput signature (not yet
         // validated on MK7 USA console) and mk7re simulated-player frame hook.
         Hook g_nativeHook;
@@ -845,13 +845,13 @@ namespace CTRPluginFramework
         {
             if (Process::GetTitleID() != MK7_USA || !g_ready)
             {
-                MessageBox("P006.3a hook locked",
+                MessageBox("P006.3b hook locked",
                     "Enter MK7 USA Time Trial and enable READY first.")();
                 return;
             }
             if (g_nativeHookEnabled)
             {
-                MessageBox("P006.3a hook running",
+                MessageBox("P006.3b hook running",
                     "Pass-through hook already installed. Test physical A,"
                     " then examine native hook diagnostics.")();
                 return;
@@ -860,7 +860,7 @@ namespace CTRPluginFramework
             if (!g_observation.candidate || !g_observation.speedValid ||
                 !g_vehicleAddress)
             {
-                MessageBox("P006.3a hook locked",
+                MessageBox("P006.3b hook locked",
                     "Valid kart position and speed required. Use offline Time Trial.")();
                 return;
             }
@@ -871,7 +871,7 @@ namespace CTRPluginFramework
                 !Process::Read32(pad + 0x1C, padFrameWord) ||
                 !Process::Read8(pad + 0x3D, padPaused))
             {
-                MessageBox("P006.3a hook locked",
+                MessageBox("P006.3b hook locked",
                     "Invalid player pad. Do not install hook.")();
                 return;
             }
@@ -883,7 +883,7 @@ namespace CTRPluginFramework
                     "USA calcInput signature matches: %lu (need exactly 1)."
                     " No hook installed.",
                     static_cast<unsigned long>(g_nativeScanMatches));
-                MessageBox("P006.3a incompatible signature", msg)();
+                MessageBox("P006.3b incompatible signature", msg)();
                 return;
             }
             g_nativeHookAddress = found;
@@ -896,12 +896,12 @@ namespace CTRPluginFramework
             {
                 g_nativeHookAddress = 0;
                 g_nativePlayerPad = 0;
-                MessageBox("P006.3a hook installation failed",
+                MessageBox("P006.3b hook installation failed",
                     "Hook framework rejected the address. No driving allowed.")();
                 return;
             }
             g_nativeHookEnabled = true;
-            MessageBox("P006.3a PASS-THROUGH enabled",
+            MessageBox("P006.3b PASS-THROUGH enabled",
                 "No artificial input is active. Resume Time Trial and"
                 " hold physical A for 3 seconds; check native diagnostics."
                 " If the game behaves oddly, quit and disable Plugin Loader.")();
@@ -919,13 +919,13 @@ namespace CTRPluginFramework
                 "Pulse trials: %u\n"
                 "Native A frames: %lu\n"
                 "Pass-through release frames: %lu\n"
-                "Native state: %lu (0 off/1 arm/2 done/3 aborted)\n"
+                "Native state: %lu (0 off/1 arm/2 done/3 abort/4 write)\n"
                 "Control phase: %s\n"
                 "Dry-run/physical B: %s/%s\n"
                 "HID input injection: DISABLED\n"
-                "Read failures: %lu\n"
-                "Actuator: DISABLED in P006.3a\n"
-                "Frame-hook compatibility is still UNVERIFIED",
+                "Read/write failures: %lu/%lu\n"
+                "Actuator: one-shot, max 3 A frames\n"
+                "Artificial A delivery UNVERIFIED",
                 g_nativeHookEnabled.load(std::memory_order_acquire) ? "YES" : "NO",
                 static_cast<unsigned long>(g_nativeScanMatches),
                 static_cast<unsigned long>(g_nativeHookAddress),
@@ -938,8 +938,9 @@ namespace CTRPluginFramework
                 ControlName(g_control),
                 g_dryRunComplete ? "YES" : "NO",
                 g_physicalAbortVerified ? "YES" : "NO",
-                static_cast<unsigned long>(g_nativeReadFailures));
-            MessageBox("P006.3a Native Frame Hook", msg)();
+                static_cast<unsigned long>(g_nativeReadFailures),
+                static_cast<unsigned long>(g_nativeWriteFailures));
+            MessageBox("P006.3b Native Frame Hook", msg)();
         }
 
         // mk7re/MK7-Memory: KDPad::m_data_on_frame +0x1C,
@@ -1527,12 +1528,12 @@ namespace CTRPluginFramework
                             AbortControl("Native hook not calibrated/active");
                             return;
                         }
-                        g_nativeInjectedFrames = 0;
-                        g_nativeReleaseFrames = 0;
-                        g_nativeAbortSignal = 0;
-                        g_nativeDeadline = static_cast<u32>(now) +
-                            NATIVE_FRAME_TIMEOUT_MS;
-                        g_nativePulseState = 1;
+                        g_nativeInjectedFrames.store(0, std::memory_order_release);
+                        g_nativeReleaseFrames.store(0, std::memory_order_release);
+                        g_nativeAbortSignal.store(0, std::memory_order_release);
+                        g_nativeDeadline.store(static_cast<u32>(now) +
+                            NATIVE_FRAME_TIMEOUT_MS, std::memory_order_release);
+                        g_nativePulseState.store(1, std::memory_order_release);
                         g_control = PULSE;
                         g_controlPulseStart = now;
                         g_controlObserveEndAt = 0;
@@ -1589,12 +1590,15 @@ namespace CTRPluginFramework
             }
             if (!dryRun && (!g_dryRunComplete || !g_physicalAbortVerified ||
                             !g_nativeHookEnabled || g_nativeSeenFrames < 30 ||
-                            g_nativeManualAFrames < 10))
+                            g_nativeManualAFrames < 10 ||
+                            g_nativeReadFailures != 0 ||
+                            g_nativeWriteFailures != 0 ||
+                            g_nativePulseTrials != 0))
             {
-                MessageBox("P006.3a native A pulse LOCKED",
+                MessageBox("P006.3b native A pulse LOCKED",
                     "Require installed pass-through hook, 30 game frames,"
-                    " 10 physical-A frames, one complete 5s dry-run, and"
-                    " another dry-run physically aborted by B.")();
+                    " 10 physical-A frames, completed dry-run, separate"
+                    " physical B abort, zero faults and no prior pulse.")();
                 return;
             }
             if (!g_ready || Process::GetTitleID() != MK7_USA)
@@ -1625,8 +1629,8 @@ namespace CTRPluginFramework
             g_pulseMk7AccelerateSeen = g_pulseMovedSeen = false;
             g_nativePulseState = 0;
             g_nativeDeadline = 0;
-            MessageBox(dryRun ? "P006.3a DRY RUN queued" :
-                "P006.3a NATIVE 3-FRAME A TEST queued",
+            MessageBox(dryRun ? "P006.3b DRY RUN queued" :
+                "P006.3b NATIVE 3-FRAME A TEST queued",
                 dryRun
                 ? "Release A/B/START after closing the menu."
                   " A neutral-input interlock runs before the FIVE-SECOND countdown."
@@ -1639,14 +1643,8 @@ namespace CTRPluginFramework
         }
 
         void QueueDryRun(MenuEntry *) { QueueControlExperiment(true); }
-        // Safety audit gate: NEVER allow synthetic input on the first
-        // real-hardware hook build. Follow-up actuation needs a separate review.
-        void QueueNativePulse(MenuEntry *)
-        {
-            MessageBox("P006.3a actuator LOCKED",
-                "PASS-THROUGH ONLY. No game-frame writes in this build."
-                " First validate hook behavior on the New 3DS.")();
-        }
+        // Only explicit one-shot test; all guards in QueueControlExperiment.
+        void QueueNativePulse(MenuEntry *) { QueueControlExperiment(false); }
 
         void CancelControl(MenuEntry *)
         {
@@ -1754,7 +1752,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P006.3a | READY" : "CK P006.3a | INACTIVE",
+            screen.Draw(g_ready ? "CK P006.3b | READY" : "CK P006.3b | INACTIVE",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -1913,7 +1911,7 @@ namespace CTRPluginFramework
             {
                 AbortControl("READY turned off");
                 g_nativePulseState = 0;
-                // Stop collecting before unhooking. No actuator exists here.
+                // Disarm synthetic input before disabling the hook.
                 g_nativeHookEnabled.store(false, std::memory_order_release);
                 g_nativePlayerPad.store(0, std::memory_order_release);
                 if (g_nativeHook.IsEnabled())
@@ -2178,22 +2176,22 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P006.3a", 0, 0, 9,
-            "Experimental MK7 game-frame input hook, OFF at boot.\n"
-            "Pulse locked until native calibration and two dry runs.");
+        PluginMenu menu("Collie Kart P006.3b", 0, 0, 11,
+            "Optional one-shot native A. OFF by default.\n"
+            "Requires calibration, dry-run and B-abort.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
             "Master safety toggle for telemetry and native control.");
-        // P006.3a core tests stay at the top; the legacy diagnostics follow.
+        // P006.3b core tests stay at the top; the legacy diagnostics follow.
         menu += new MenuEntry("1: Install PASS-THROUGH hook", nullptr, HookPassThrough,
             "Native hook verification, no artificial input. Calibration first.");
         menu += new MenuEntry("2: Native hook diagnostics", nullptr, NativeHookDiagnostics,
             "Verify frame callbacks and real A input; inspect pulse results.");
         menu += new MenuEntry("3: Queue 5s SAFETY dry run", nullptr, QueueDryRun,
             "No injection; after a finish, repeat and press B to abort.");
-        menu += new MenuEntry("4: NATIVE pulse LOCKED (P006.3a)", nullptr, QueueNativePulse,
-            "No artificial input permitted until pass-through hardware validation.");
+        menu += new MenuEntry("4: Queue ONE-SHOT 3-frame A pulse", nullptr, QueueNativePulse,
+            "Only after calibration, successful dry run, and physical B abort.");
         menu += new MenuEntry("5: ABORT control experiment", nullptr, CancelControl,
             "Cancel countdown/pulse; physical B also aborts.");
         menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
