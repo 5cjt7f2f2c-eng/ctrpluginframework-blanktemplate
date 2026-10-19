@@ -736,13 +736,17 @@ void AiAttemptReport(MenuEntry *)
     for(unsigned i=0;i<g_aiCount;++i)
     {
         const AiAttempt &a=g_aiAttempts[i];
-        char row[200];
+        char row[330];
         std::snprintf(row,sizeof(row),
-            "\n#%u %s | %.0f%% route | avg/max %.1f/%.1f"
-            "\nscore %.1f gain %.2f | %u ticks / %lu writes | %s",
+            "\n#%u %s | %.0f%% distance | avg/max %.1f/%.1f"
+            "\nEnd closest %.1f @%.2fs | finish %.1f, speed %.2f"
+            "\nApproach %lu ticks | gain %.2f | %u decisions / %lu writes | %s",
             a.attemptNo,AiEndName(a.reason),a.progress*100,
-            a.meanError,a.maxError,a.score,a.gain,a.count,
-            static_cast<unsigned long>(a.frames),
+            a.meanError,a.maxError,a.closestEndpoint,
+            static_cast<double>(a.closestEndpointMs)/1000.0,
+            a.finalEndpoint,a.endSpeed,
+            static_cast<unsigned long>(a.finalApproachTicks),
+            a.gain,a.count,static_cast<unsigned long>(a.frames),
             a.saved?"SAVED":"UNSAVED");
         result+=row;
     }
@@ -771,29 +775,38 @@ bool AiSaveAttempt(AiAttempt &a)
         "attempt=%u,reason=%s,gain=%.4f,score=%.3f,"
         "completion=%.3f,mean_error=%.3f,max_error=%.3f,"
         "frames=%lu,faults=%lu,policy_v=%u,model_mse=%.5f,"
+        "closest_end=%.3f,closest_time_ms=%lu,"
+        "final_end=%.3f,final_speed=%.4f,approach_ticks=%lu,"
         "weights=%.4f;%.4f;%.4f;%.4f",
         a.attemptNo,AiEndName(a.reason),a.gain,a.score,
         a.progress,a.meanError,a.maxError,
         static_cast<unsigned long>(a.frames),
         static_cast<unsigned long>(a.nativeFaults),g_aiPolicyVersion,
-        g_aiTrainingMSE,a.policyWeights[0],a.policyWeights[1],
+        g_aiTrainingMSE,a.closestEndpoint,
+        static_cast<unsigned long>(a.closestEndpointMs),
+        a.finalEndpoint,a.endSpeed,
+        static_cast<unsigned long>(a.finalApproachTicks),
+        a.policyWeights[0],a.policyWeights[1],
         a.policyWeights[2],a.policyWeights[3]);
     bool ok=f.WriteLine(row)==File::SUCCESS;
     if(ok)ok=f.WriteLine(
         "time_ms,pos_x,pos_z,speed,waypoint,target_x,target_z,"
         "path_error,heading_error,model_steer,final_steer,"
-        "buttons,stick_x,cumulative_native_frames")==File::SUCCESS;
+        "buttons,stick_x,cumulative_native_frames,"
+        "route_progress,endpoint_distance,desired_speed,final_approach")==File::SUCCESS;
     for(unsigned i=0;i<a.count&&ok;++i)
     {
         const AiTrace &t=a.log[i];
         const int n=std::snprintf(row,sizeof(row),
             "%lu,%.4f,%.4f,%.4f,%u,%.4f,%.4f,%.4f,%.6f,"
-            "%.5f,%.5f,%u,%u,%lu",
+            "%.5f,%.5f,%u,%u,%lu,%.5f,%.4f,%.4f,%u",
             static_cast<unsigned long>(t.tMs),t.x,t.z,t.speed,
             t.waypoint,t.routeX,t.routeZ,t.pathError,t.angleError,
             t.policySteer,t.cmdSteer,static_cast<unsigned>(t.buttons),
             static_cast<unsigned>(t.stick),
-            static_cast<unsigned long>(t.delivered));
+            static_cast<unsigned long>(t.delivered),t.routeProgress,
+            t.endpointDistance,t.desiredSpeed,
+            static_cast<unsigned>(t.stopApproach));
         if(n<=0||n>=static_cast<int>(sizeof(row))||
            f.WriteLine(row)!=File::SUCCESS)ok=false;
     }
