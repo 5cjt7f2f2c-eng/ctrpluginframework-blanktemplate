@@ -1559,7 +1559,7 @@ namespace CTRPluginFramework
                 }
                 if (now < g_controlPulseStart ||
                     now - g_controlPulseStart > NATIVE_FRAME_TIMEOUT_MS ||
-                    g_nativePulseState != 1)
+                    (g_nativePulseState != 1 && g_nativePulseState != 4))
                 {
                     AbortControl("Native pulse did not finish on time");
                     return;
