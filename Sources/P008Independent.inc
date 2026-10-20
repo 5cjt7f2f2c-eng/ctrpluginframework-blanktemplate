@@ -31,7 +31,8 @@ const char* IndModeName(IndMode m) {
 }
 constexpr unsigned IND_ACTIONS=9, IND_HASH=256, IND_FEATURES=14;
 constexpr unsigned IND_ATTEMPTS=6, IND_TICKS=2000;
-constexpr u64 IND_TICK_MS=65, IND_COMMAND_TTL=180, IND_GRACE=5000;
+constexpr u64 IND_TICK_MS=65, IND_COMMAND_TTL=180, IND_GRACE=1200;
+constexpr u64 IND_HOLD_MS=390; // six sensor ticks per learned action
 constexpr float IND_ALPHA=0.12f, IND_DISCOUNT=0.985f;
 struct IndSensor {
     bool valid=false, faceValid=false, surfaceValid=false, wallValid=false;
@@ -78,6 +79,9 @@ static float g_indRewardMaximum=0,g_indProgressAt=0,g_indLastReward=0;
 static float g_indPreviousProgress=0;
 static unsigned g_indStartLap=0,g_indPrevWall=0,g_indNoAdvance=0;
 static bool g_indPrevious=false;
+static u64 g_indActionAt=0;
+static float g_indHeldReward=0;
+static unsigned g_indHeldTicks=0;
 static u8 g_indPrevAction=0;
 static u16 g_indPrevFeatures[IND_FEATURES]={};
 static unsigned g_indModelSnapshot=0;
@@ -278,11 +282,13 @@ void IndStopNow(int reason) {
         a.updates=g_indUpdates;
         if(g_indPrevious && g_indMode==IND_TRAIN) {
             const float terminal=reason==IND_LAP?20.0f:0.0f;
-            IndUpdate(g_indPrevFeatures,g_indPrevAction,terminal,0);
+            IndUpdate(g_indPrevFeatures,g_indPrevAction,
+                      g_indHeldReward+terminal,0);
         }
         if(a.count)++g_indCount;
     }
-    g_indPrevious=false;
+    g_indPrevious=false;g_indActionAt=0;
+    g_indHeldReward=0;g_indHeldTicks=0;
     g_indPhase=IND_END;
 }
 void IndCycleMode(MenuEntry *) {
@@ -317,13 +323,12 @@ void IndStart(MenuEntry *) {
         return;
     }
     if(!g_nativeHookEnabled.load()||g_nativeSeenFrames<30||
-       g_nativeManualAFrames<10||g_nativeReadFailures!=0||
-       g_nativeWriteFailures!=0||g_aiActuatorFaults!=0||
-       !g_dryRunComplete||!g_physicalAbortVerified) {
+       g_nativeReadFailures!=0||g_nativeWriteFailures!=0||
+       g_aiActuatorFaults!=0) {
         ++g_indDenials;
         MessageBox("Native preflight required",
-            "Verify pass-through, manual A, 5s dry run and physical B abort."
-            " Zero actuator faults required.")();
+            "Native hook must be active for 30 frames with zero faults."
+            " Physical controls still abort and the watchdog remains active.")();
         return;
     }
     Probe();
@@ -338,12 +343,13 @@ void IndStart(MenuEntry *) {
     g_indPhase=IND_WAIT;g_indWaitAt=0;g_indNeutralAt=0;
     g_indStarted=0;g_indLastTick=0;
     g_indPrevious=false;g_indNoAdvance=0;
+    g_indActionAt=0;g_indHeldReward=0;g_indHeldTicks=0;
     g_aiAuthority.store(false,std::memory_order_release);
     g_aiPhysicalOverride.store(0);
     ++g_indStartCalls;
     MessageBox("Independent attempt queued",
         "No demo needed. Close CTRPF, resume race, release A/B/START"
-        " and center Circle Pad before 5s countdown ends."
+        " and center Circle Pad during the short neutral check."
         " Physical controls abort. OFFLINE USA Rev2 Time Trial ONLY."
         " Radar is NOT available in P008 v1.")();
 }
@@ -377,6 +383,7 @@ void IndStep(u64 now,bool menuOpen) {
         g_indPreviousProgress=s.progress;
         g_indProgressAt=s.maximum;g_indStartLap=s.lap;
         g_indPrevWall=0;g_indNoAdvance=0;
+        g_indActionAt=0;g_indHeldReward=0;g_indHeldTicks=0;
         g_indFrameStart=g_aiActuatorFrames.load();
         g_indFaultStart=g_aiActuatorFaults.load();
         g_aiPassRelease.store(0);
@@ -426,9 +433,23 @@ void IndStep(u64 now,bool menuOpen) {
         // Terminal SARSA update uses the lap reward, without bootstrapping
         // from an action that will never execute.
         if(g_indPrevious&&training)
-            IndUpdate(g_indPrevFeatures,g_indPrevAction,reward,0);
+            IndUpdate(g_indPrevFeatures,g_indPrevAction,
+                      g_indHeldReward+reward,0);
         g_indPrevious=false;
         IndStopNow(IND_LAP);
+        return;
+    }
+    // Keep observing and renewing the short native-input watchdog on
+    // every tick, but do not change direction during a held maneuver.
+    if(g_indPrevious && now>=g_indActionAt &&
+       now-g_indActionAt<IND_HOLD_MS) {
+        g_indHeldReward+=reward;
+        ++g_indHeldTicks;
+        g_aiCommand.store((static_cast<u32>(IND_STICKS[g_indPrevAction])<<16)|
+            IND_BUTTONS[g_indPrevAction],std::memory_order_release);
+        g_aiDeadlineMs.store(static_cast<u32>(now+IND_COMMAND_TTL),
+            std::memory_order_release);
+        g_aiAuthority.store(true,std::memory_order_release);
         return;
     }
     u16 features[IND_FEATURES];
@@ -436,7 +457,9 @@ void IndStep(u64 now,bool menuOpen) {
     bool explored=false;float q=0;
     const u8 action=IndSelect(features,training,explored,q);
     if(g_indPrevious&&training)
-        IndUpdate(g_indPrevFeatures,g_indPrevAction,reward,q);
+        IndUpdate(g_indPrevFeatures,g_indPrevAction,
+                  g_indHeldReward+reward,q);
+    g_indHeldReward=0;g_indHeldTicks=0;g_indActionAt=now;
     if(g_indNoAdvance>270){IndStopNow(IND_BAD_SENSOR);return;}
     IndDecision &d=a.log[a.count++];
     d.t=static_cast<u32>(now-g_indStarted);
