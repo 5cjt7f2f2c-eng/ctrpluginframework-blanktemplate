@@ -724,7 +724,7 @@ bool IndLoadModelFile(const std::string &path) {
     char *nl=static_cast<char*>(std::memchr(p,'\n',end-p));
     if(!nl)return false;
     *nl=0;
-    if(std::strcmp(p,"COLLIE_P008_V1,9,256")!=0)return false;
+    if(std::strcmp(p,"COLLIE_P0082A_V1,9,256")!=0)return false;
     p=nl+1;
     // Validate the entire snapshot into temporary storage before applying.
     static float candidate[IND_ACTIONS][IND_HASH];
