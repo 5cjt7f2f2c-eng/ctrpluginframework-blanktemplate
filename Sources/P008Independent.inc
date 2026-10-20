@@ -603,13 +603,13 @@ void IndSurfaceSnapshot(MenuEntry *) {
         "DUMMY3","ZONE"};
     char msg[430];
     std::snprintf(msg,sizeof(msg),
-        "Slot 0x%08lX: %s\\n"
-        "Object 0x%08lX: %s\\n"
-        "Collision flags: %s 0x%08lX\\n"
-        "Raw flags: %s 0x%04X\\n"
-        "Base type: %s\\n"
-        "LOOK-AHEAD: UNKNOWN (not queried)\\n"
-        "READ ONLY. Manual driving only.\\n"
+        "Slot 0x%08lX: %s\n"
+        "Object 0x%08lX: %s\n"
+        "Collision flags: %s 0x%08lX\n"
+        "Raw flags: %s 0x%04X\n"
+        "Base type: %s\n"
+        "LOOK-AHEAD: UNKNOWN (not queried)\n"
+        "READ ONLY. Manual driving only.\n"
         "Citra-derived address: hardware validation required.",
         static_cast<unsigned long>(slot),slotOk?"READ":"INVALID",
         static_cast<unsigned long>(ptr),ptrOk?"VALID PTR":"INVALID",
