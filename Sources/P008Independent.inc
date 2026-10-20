@@ -39,6 +39,11 @@ struct IndSensor {
     bool managerValid=false, radarValid=false; // radar MUST remain invalid in v1.
     float x=0,z=0,speed=0,faceX=0,faceZ=1;
     float yaw=0, progress=0, maximum=0;
+    // LapRankChecker::KartInfo read-only checkpoint telemetry.
+    // Direction is a local checkpoint heading, NOT a target bearing.
+    bool checkpointDirValid=false;
+    u8 checkpointPrev=0,checkpointCurrent=0;
+    float checkpointDirX=0,checkpointDirZ=0,checkpointHeadingError=0;
     float slip=0; // difference between heading of travel and facing
     u32 surface=0, wall=0, lap=0, flags=0;
     int mode=0;
@@ -124,6 +129,22 @@ bool IndObserve(IndSensor &s,bool requireUnpaused=true) {
        !ReadPointer(g_vehicleAddress+0xE0,pad)||
        !Process::Read8(pad+0x3D,paused) || (requireUnpaused&&paused))
         return false;
+    // Native KartInfo offsets from mk7re/MK7-Memory. No unknown
+    // checkpoint accessor pointers or invented next-target geometry.
+    u8 cpPrev=0,cpCurrent=0;
+    float cpX=0,cpZ=0;
+    if(Process::Read8(g_demoKartAddress+0xC,cpPrev)&&
+       Process::Read8(g_demoKartAddress+0xD,cpCurrent)&&
+       ReadNumber(g_demoKartAddress+0x4,cpX)&&
+       ReadNumber(g_demoKartAddress+0x8,cpZ)&&
+       std::isfinite(cpX)&&std::isfinite(cpZ)&&
+       cpX*cpX+cpZ*cpZ>0.25f&&
+       cpX*cpX+cpZ*cpZ<2.25f) {
+        const float n=std::sqrt(cpX*cpX+cpZ*cpZ);
+        s.checkpointPrev=cpPrev;s.checkpointCurrent=cpCurrent;
+        s.checkpointDirX=cpX/n;s.checkpointDirZ=cpZ/n;
+        s.checkpointDirValid=true;
+    }
     if(!std::isfinite(s.x)||!std::isfinite(s.z)||
        !std::isfinite(s.speed)||!std::isfinite(s.progress)||
        !std::isfinite(s.maximum)||std::fabs(s.x)>1000000.0f||
@@ -137,6 +158,13 @@ bool IndObserve(IndSensor &s,bool requireUnpaused=true) {
         const float len=std::sqrt(fx*fx+fz*fz);
         if(std::isfinite(len) && len>.5f && len<1.5f) {
             s.faceX=fx/len;s.faceZ=fz/len;s.faceValid=true;
+            if(s.checkpointDirValid) {
+                const float cross=s.faceX*s.checkpointDirZ-
+                                  s.faceZ*s.checkpointDirX;
+                const float dot=s.faceX*s.checkpointDirX+
+                                s.faceZ*s.checkpointDirZ;
+                s.checkpointHeadingError=std::atan2(cross,dot);
+            }
         }
     }
     // Distinguish kart facing from actual movement direction (side-slip).
@@ -498,7 +526,7 @@ void IndSensors(MenuEntry *) {
     Probe();IndSensor s;
     const bool ok=IndObserve(s,false);
     g_indLastSensor=s;
-    char b[550];
+    char b[700];
     std::snprintf(b,sizeof(b),
         "Sample: %s | facing: %s\n"
         "Facing X/Z: %.3f / %.3f\n"
@@ -506,6 +534,9 @@ void IndSensors(MenuEntry *) {
         "Surface: %s (%lu)\n"
         "Wall: %s (%lu)\n"
         "Progress: %.4f max %.4f lap %lu\n"
+        "CP heading: %s prev %u current %u\n"
+        "CP dir X/Z: %.3f / %.3f relative %.1f deg\n"
+        "NEXT TARGET BEARING: UNAVAILABLE\n"
         "Collision mgr: %s 0x%08lX\n"
         "RADAR: UNAVAILABLE (0/12 rays)\n"
         "Never use dummy ray readings to steer.",
@@ -516,6 +547,11 @@ void IndSensors(MenuEntry *) {
         s.wallValid?"VALID":"UNKNOWN",
         static_cast<unsigned long>(s.wall),s.progress,s.maximum,
         static_cast<unsigned long>(s.lap+1),
+        s.checkpointDirValid?"READ ONLY":"INVALID",
+        static_cast<unsigned>(s.checkpointPrev),
+        static_cast<unsigned>(s.checkpointCurrent),
+        s.checkpointDirX,s.checkpointDirZ,
+        s.checkpointHeadingError*57.2957795f,
         s.managerValid?"PTR ONLY":"UNKNOWN",
         static_cast<unsigned long>(s.manager));
     MessageBox("P008 read-only sensor preflight",b)();
