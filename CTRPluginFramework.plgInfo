@@ -3,22 +3,21 @@ Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 Version:
     Major: 0
     Minor: 0
-    Revision: 18
+    Revision: 81
 
 Targets:
 
-Title: Collie Kart P007b.2
+Title: Collie Kart P008.1
 
-Summary: Endpoint-aware stopping, route-progress scoring and six-attempt recorder
+Summary: Independent learning, held controls, checkpoint heading diagnostics
 
 Description: |
-    Experimental supervised Mario Kart 7 USA Rev2 imitation driver.
-    Loads saved demonstration CSV, trains a small steering regression
-    entirely on New Nintendo 3DS, and drives toward waypoint reference
-    under hard native-command deadline with manual physical override.
-    Six attempts stored in RAM, with individual CSV decision/action/error
-    exports and best-performing steering-gain search. Only offline
-    Toad Circuit Time Trial. Untested on hardware; P006.4 fallback preserved.
+    Collie Kart P008.1 experimental independent learner for MK7 USA Rev2.
+    Holds native steering decisions for approximately 390ms while
+    observing every 65ms and maintaining the command watchdog.
+    Adds read-only checkpoint index and heading diagnostics.
+    Next-checkpoint target bearing is NOT yet available to the policy.
+    Offline supervised Time Trial testing only; physical override enabled.
 
 Compatibility: Any
 
