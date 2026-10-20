@@ -73,6 +73,9 @@ static u32 g_indFrameStart=0,g_indFaultStart=0,g_indLimit=12000;
 static int g_indLastReason=IND_NONE;
 static IndSensor g_indLastSensor;
 static float g_indRewardMaximum=0,g_indProgressAt=0,g_indLastReward=0;
+// P008.1: current-progress delta is distinct from historical best progress.
+// A reward is paid only for NEW legitimate territory; retreat is penalized.
+static float g_indPreviousProgress=0;
 static unsigned g_indStartLap=0,g_indPrevWall=0,g_indNoAdvance=0;
 static bool g_indPrevious=false;
 static u8 g_indPrevAction=0;
@@ -238,13 +241,20 @@ void IndUpdate(const u16 f[IND_FEATURES],u8 action,float reward,float nextQ) {
 float IndReward(const IndSensor &s,bool &lapFinished) {
     lapFinished=s.lap>g_indStartLap;
     float reward=-0.008f; // time cost, not speed reward
-    float delta=s.maximum-g_indRewardMaximum;
-    if(delta>0 && delta<=0.025f) {
-        reward+=IndClamp(delta*100.0f,0,2.5f);
+    const float delta=s.progress-g_indPreviousProgress;
+    const float newGround=s.maximum-g_indRewardMaximum;
+    // Ignore large discontinuities; do not reward repeated traversal of
+    // already visited track. Legitimate lap transition is handled below.
+    if(delta>0.000001f && delta<=0.025f &&
+       newGround>0.000001f && newGround<=0.025f) {
+        reward+=IndClamp(newGround*100.0f,0,2.5f);
         g_indNoAdvance=0;
-    } else if(++g_indNoAdvance>50) {
-        reward-=.055f; // no useful progress for several seconds
+    } else {
+        if(delta<-.0001f && delta>=-.025f)
+            reward-=IndClamp(-delta*35.0f,0,0.45f);
+        if(++g_indNoAdvance>50)reward-=.055f;
     }
+    g_indPreviousProgress=s.progress;
     if(s.maximum>=g_indRewardMaximum)
         g_indRewardMaximum=s.maximum;
     if(s.wallValid && s.wall && !g_indPrevWall) reward-=1.0f;
@@ -364,6 +374,7 @@ void IndStep(u64 now,bool menuOpen) {
         }
         g_indPhase=IND_DRIVE;g_indStarted=now;g_indLastTick=0;
         g_indLastSensor=s;g_indRewardMaximum=s.maximum;
+        g_indPreviousProgress=s.progress;
         g_indProgressAt=s.maximum;g_indStartLap=s.lap;
         g_indPrevWall=0;g_indNoAdvance=0;
         g_indFrameStart=g_aiActuatorFrames.load();
