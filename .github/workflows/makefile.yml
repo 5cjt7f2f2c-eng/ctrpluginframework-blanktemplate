@@ -21,11 +21,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Collie-Kart-P0081-3GX
-          path: CTRPluginFramework-BlankTemplate.3gx
+          path: CollieKart.3gx
           if-no-files-found: error
       - name: Upload debug ELF
         uses: actions/upload-artifact@v4
         with:
           name: Collie-Kart-P0081-ELF
-          path: CTRPluginFramework-BlankTemplate.elf
+          path: CollieKart.elf
           if-no-files-found: error
