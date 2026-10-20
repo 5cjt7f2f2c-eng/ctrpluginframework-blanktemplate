@@ -1,8 +1,7 @@
-// Collie Kart Portable P007a -- read-only manual demonstration capture.
-// Fast observation, waypoint extraction, CSV export. No AI driving.
-// No synthetic input menu actions; P006.4 remains preserved.
-// This iteration only records manual driving.
-// Previous P001-P006.2 passive telemetry, reward/CSV and backups preserved.
+// Collie Kart P008: separate, route-free autonomous learning prototype.
+// P007b.2 guided learner and native input safety baseline preserved.
+// P008 independent driving never reads a demonstration/CPU racing line.
+// Collision radar deliberately NOT claimed operational without validation.
 
 #include <3ds.h>
 #include <CTRPluginFramework.hpp>
@@ -1714,6 +1713,8 @@ namespace CTRPluginFramework
         // P007b on-device learner is compiled inside this namespace, after
         // P007a's demonstration and pointer-observation helpers.
         #include "P007bLearning.inc"
+        // Independent TD policy, validated-data preflight and model snapshots.
+        #include "P008Independent.inc"
 
         // At most ~10Hz based on elapsed milliseconds, not frame count.
         // Read-only: no file operations and no changes to the MK7 process.
@@ -2316,7 +2317,7 @@ namespace CTRPluginFramework
 
             // P001's hardware-approved position remains unchanged.
             screen.DrawRect(2, 224, 156, 14, Color::Black, true);
-            screen.Draw(g_ready ? "CK P007b.2 READY" : "CK P007b.2 OFF",
+            screen.Draw(g_ready ? "CK P008 READY" : "CK P008 OFF",
                         5, 226, g_ready ? Color::Green : Color::White, Color::Black);
 
             // Elapsed-time schedule: avoids assuming a specific MK7 FPS.
@@ -2324,6 +2325,7 @@ namespace CTRPluginFramework
             if (!menuOpen && g_ready &&
                 (g_live || g_recording || g_demoRecording ||
                  g_aiPhase == AI_COUNTDOWN || g_aiPhase == AI_RUNNING ||
+                 g_indPhase == IND_WAIT || g_indPhase == IND_DRIVE ||
                  g_control == WAIT_CLOSE ||
                  g_control == COUNTDOWN || g_control == PULSE ||
                  g_control == OBSERVE || g_traceInput ||
@@ -2389,6 +2391,7 @@ namespace CTRPluginFramework
                 }
                 ControlStep(osGetTime(), false);
                 AiStep(osGetTime(), false);
+                IndStep(osGetTime(), false);
                 if (g_demoRecording)
                 {
                     // A new demonstration begins only AFTER an independent
@@ -2414,6 +2417,10 @@ namespace CTRPluginFramework
             else if (g_control == COUNTDOWN || g_control == PULSE ||
                      g_control == OBSERVE)
                 AbortControl(menuOpen ? "Menu reopened" : "READY/sensing disabled");
+            // Independent mode has its own fail-closed controller lifecycle.
+            if (menuOpen && (g_indPhase == IND_DRIVE ||
+                (g_indPhase == IND_WAIT && g_indWaitAt)))
+                IndStopNow(IND_MENU);
             if (g_live && g_ready)
             {
                 char line[96];
@@ -2559,6 +2566,8 @@ namespace CTRPluginFramework
                 g_aiAuthority.store(false, std::memory_order_release);
                 if (g_aiPhase == AI_RUNNING || g_aiPhase == AI_COUNTDOWN)
                     AiStop(AI_MASTER_OFF);
+                if (g_indPhase == IND_WAIT || g_indPhase == IND_DRIVE)
+                    IndStopNow(IND_READY_OFF);
                 g_havePreviousFlags = false;
                 g_previousModeAt = 0;
             }
@@ -2815,9 +2824,9 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P007b.2", 0, 0, 2,
-            "On-device demonstration learner + supervised AI attempts.\n"
-            "Offline MK7 USA Time Trial ONLY. Controller OFF at boot.");
+        PluginMenu menu("Collie Kart P008 v1", 0, 0, 2,
+            "Guided P007b.2 + route-free on-device independent TD learner.\n"
+            "Offline MK7 USA Rev2 Time Trial ONLY. Controller OFF at boot.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
@@ -2843,8 +2852,8 @@ namespace CTRPluginFramework
             "Check callbacks, manual A, and zero native faults.");
         menu += new MenuEntry("10: 5s SAFETY dry run", nullptr, QueueDryRun,
             "Complete one dry run; repeat and physically B-abort to certify.");
-        menu += new MenuEntry("11: START supervised AI attempt", nullptr, AiQueueAttempt,
-            "Requires trained policy and certified native actuator.");
+        menu += new MenuEntry("11: START guided P007 attempt", nullptr, IndGuidedQueue,
+            "Only in GUIDED mode. Requires demo and certified native actuator.");
         menu += new MenuEntry("12: CHANGE max AI duration", nullptr, AiCycleLimit,
             "Cycle 12, 30, 75 and 120 seconds. Always supervise.");
         menu += new MenuEntry("13: ABORT AI attempt", nullptr, AiAbortMenu,
@@ -2855,6 +2864,28 @@ namespace CTRPluginFramework
             "Separate uniquely numbered CSV for each attempt, after driving.");
         menu += new MenuEntry("16: CLEAR saved attempt batch", nullptr, AiClearSaved,
             "Requires all attempts saved; retains loaded demo and trained model.");
+        menu += new MenuEntry("P008: Cycle driver MODE", nullptr, IndCycleMode,
+            "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
+        menu += new MenuEntry("P008: READ-ONLY sensor preflight", nullptr, IndSensors,
+            "Check facing, wall, road, progress, manager pointer. No active rays yet.");
+        menu += new MenuEntry("P008: START independent attempt", nullptr, IndStart,
+            "Only TRAIN/EVALUATE. NO route used. Requires native actuator preflight.");
+        menu += new MenuEntry("P008: Change independent duration", nullptr, IndCycleLimit,
+            "Cycle 12/30/75/120 seconds. Unverified policy. Supervise.");
+        menu += new MenuEntry("P008: ABORT independent attempt", nullptr, IndAbort,
+            "Immediately revoke native controller authority.");
+        menu += new MenuEntry("P008: Independent learning report", nullptr, IndReport,
+            "See mode, policy updates, reward and all six attempt summaries.");
+        menu += new MenuEntry("P008: SAVE independent attempt CSVs", nullptr, IndSaveAttempts,
+            "Store detailed actions, exploration, Q and reward after stopping.");
+        menu += new MenuEntry("P008: CLEAR saved independent attempts", nullptr, IndClear,
+            "Clear only saved RAM attempt logs; preserve the learned model.");
+        menu += new MenuEntry("P008: SAVE learned model", nullptr, IndSaveModel,
+            "Write an immutable checksummed numbered model snapshot to SD.");
+        menu += new MenuEntry("P008: LOAD latest valid model", nullptr, IndLoadModel,
+            "Restore newest valid checksummed model, skipping partial snapshots.");
+        menu += new MenuEntry("P008: RESET model in RAM", nullptr, IndResetModel,
+            "Zero learned weights; existing SD model backups remain untouched.");
         menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
             "Status of the last attempted telemetry probe.");
         menu += new MenuEntry("Read telemetry snapshot", nullptr, Snapshot,
@@ -2884,6 +2915,8 @@ namespace CTRPluginFramework
         // No HID injection. Four controlled tests, never automatic driving.
         OSD::Run(DrawStatus);
         menu.Run();
+        g_aiAuthority.store(false,std::memory_order_release);
+        g_aiDeadlineMs.store(0,std::memory_order_release);
         g_nativePulseState = 0;
         g_nativePlayerPad = 0;
         g_nativeHookEnabled = false;
