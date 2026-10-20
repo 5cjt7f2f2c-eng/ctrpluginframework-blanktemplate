@@ -2824,8 +2824,8 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P008 v1", 0, 0, 2,
-            "Guided P007b.2 + route-free on-device independent TD learner.\n"
+        PluginMenu menu("Collie Kart P008.1 - CK81-1020B", 0, 0, 81,
+            "CK81-1020B | held-action learning + checkpoint diagnostics.\n"
             "Offline MK7 USA Rev2 Time Trial ONLY. Controller OFF at boot.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
