@@ -1,8 +1,8 @@
-name: Collie Kart P008.1 Navigation Build
+name: Collie Kart P008.2 Track-Aware Build
 
 on:
   push:
-    branches: [master, collie-kart-p005-sensor-fusion, collie-kart-p006-first-contact, collie-kart-p006-input-pipeline-trace, collie-kart-p0062-native-control-preflight, collie-kart-p0063-frame-hook-first-contact, collie-kart-p0063a-pass-through-safety, collie-kart-p0063b-native-one-shot-a, collie-kart-p0064-four-control-validation, collie-kart-p007a-demonstration-recorder, collie-kart-p007a1-capture-startup-diagnostics, collie-kart-p007b-learning-multiattempt, collie-kart-p007b1-attempt-startup-fix, collie-kart-p007b2-finish-stop-control, collie-kart-p008-independent-learning-v1, collie-kart-p0081-checkpoint-navigation]
+    branches: [master, collie-kart-p005-sensor-fusion, collie-kart-p006-first-contact, collie-kart-p006-input-pipeline-trace, collie-kart-p0062-native-control-preflight, collie-kart-p0063-frame-hook-first-contact, collie-kart-p0063a-pass-through-safety, collie-kart-p0063b-native-one-shot-a, collie-kart-p0064-four-control-validation, collie-kart-p007a-demonstration-recorder, collie-kart-p007a1-capture-startup-diagnostics, collie-kart-p007b-learning-multiattempt, collie-kart-p007b1-attempt-startup-fix, collie-kart-p007b2-finish-stop-control, collie-kart-p008-independent-learning-v1, collie-kart-p0081-checkpoint-navigation, collie-kart-p0082-track-aware-learning]
   pull_request:
     branches: [master, collie-kart-p005-sensor-fusion]
   workflow_dispatch:
@@ -15,17 +15,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build P008.1
+      - name: Build P008.2a
         run: make
       - name: Upload plugin 3GX
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P0081-3GX
+          name: Collie-Kart-P0082a-3GX
           path: CollieKart.3gx
           if-no-files-found: error
       - name: Upload debug ELF
         uses: actions/upload-artifact@v4
         with:
-          name: Collie-Kart-P0081-ELF
+          name: Collie-Kart-P0082a-ELF
           path: CollieKart.elf
           if-no-files-found: error
