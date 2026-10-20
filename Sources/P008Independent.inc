@@ -29,7 +29,7 @@ const char* IndModeName(IndMode m) {
         case IND_EVAL:return "EVALUATE";
         default:return "UNKNOWN";}
 }
-constexpr unsigned IND_ACTIONS=9, IND_HASH=256, IND_FEATURES=14;
+constexpr unsigned IND_ACTIONS=9, IND_HASH=256, IND_FEATURES=18;
 constexpr unsigned IND_ATTEMPTS=6, IND_TICKS=2000;
 constexpr u64 IND_TICK_MS=65, IND_COMMAND_TTL=180, IND_GRACE=1200;
 constexpr u64 IND_HOLD_MS=390; // six sensor ticks per learned action
@@ -232,6 +232,14 @@ void IndFeatures(const IndSensor &s,u16 out[IND_FEATURES]) {
     out[11]=IndHash(11,face,0);
     out[12]=IndHash(12,s.flags&1u?1:0,0); // reverse progress flag
     out[13]=IndHash(13,IndBin(s.slip,2.0f,-7,7),0);
+    // P008.2a: track travel heading as an observation, never as a
+    // hardcoded steering command. This is NOT full corridor geometry.
+    const int heading=s.checkpointDirValid&&s.faceValid?
+        IndBin(s.checkpointHeadingError,.35f,-9,9):99;
+    out[14]=IndHash(14,heading,0);
+    out[15]=IndHash(15,heading,speed);
+    out[16]=IndHash(16,heading,yaw);
+    out[17]=IndHash(17,s.checkpointDirValid?1:0,0);
 }
 // Exactly zero reference to human or Nintendo routes.
 float IndQ(u8 action,const u16 f[IND_FEATURES]) {
@@ -244,7 +252,9 @@ u8 IndSelect(const u16 f[IND_FEATURES],bool explore,bool &explored,float &q) {
     explored=false;
     const float eps=explore?IndClamp(.32f-g_indUpdates*.00004f,.07f,.32f):0;
     if(eps>0 && IndUnit()<eps) {
-        const u8 a=static_cast<u8>(IndRandom()%IND_ACTIONS);
+        // Initial exploration should primarily discover forward driving;
+        // recovery/reverse remains available to learned greedy actions.
+        const u8 a=static_cast<u8>(IndRandom()%6u);
         explored=true;q=IndQ(a,f);return a;
     }
     float best=-1e20f;
@@ -677,7 +687,7 @@ void IndSaveModel(MenuEntry *) {
         MessageBox("Model save failed","File open error.")();return;
     }
     char b[110];u32 hash=2166136261u;
-    bool ok=f.WriteLine("COLLIE_P008_V1,9,256")==File::SUCCESS;
+    bool ok=f.WriteLine("COLLIE_P0082A_V1,9,256")==File::SUCCESS;
     for(unsigned a=0;a<IND_ACTIONS&&ok;++a) {
         for(unsigned i=0;i<IND_HASH&&ok;++i) {
             const s32 v=static_cast<s32>(
