@@ -328,7 +328,7 @@ void IndCycleMode(MenuEntry *) {
     }
     g_aiAuthority.store(false,std::memory_order_release);
     g_indMode=static_cast<IndMode>((static_cast<int>(g_indMode)+1)%4);
-    MessageBox("P008 driver mode",std::string(IndModeName(g_indMode))+
+    MessageBox("P008.1 driver mode",std::string(IndModeName(g_indMode))+
        "\nMANUAL: no AI. GUIDED: proven P007.\n"
        "TRAIN: independent learning. EVALUATE: no policy updates.")();
 }
@@ -554,7 +554,7 @@ void IndSensors(MenuEntry *) {
         s.checkpointHeadingError*57.2957795f,
         s.managerValid?"PTR ONLY":"UNKNOWN",
         static_cast<unsigned long>(s.manager));
-    MessageBox("P008 read-only sensor preflight",b)();
+    MessageBox("P008.1 checkpoint sensor diagnostic",b)();
 }
 void IndReport(MenuEntry *) {
     char b[280];
@@ -636,7 +636,7 @@ void IndSaveAttempts(MenuEntry *) {
     }
     char b[130];std::snprintf(b,sizeof(b),
         "Saved %u independent attempt CSVs; failed %u.",saved,failed);
-    MessageBox("P008 flight-recorder save",b)();
+    MessageBox("P008.1 flight-recorder save",b)();
 }
 void IndClear(MenuEntry *) {
     if(g_indPhase==IND_WAIT||g_indPhase==IND_DRIVE)return;
@@ -647,7 +647,7 @@ void IndClear(MenuEntry *) {
             return;
         }
     g_indCount=0;g_indPhase=IND_IDLE;
-    MessageBox("P008 RAM batch cleared","Learned policy was retained.")();
+    MessageBox("P008.1 RAM batch cleared","Learned policy was retained.")();
 }
 u32 IndChecksumStep(u32 hash,unsigned a,unsigned i,s32 scaled) {
     hash=(hash^static_cast<u32>(a+1))*16777619u;
