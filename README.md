@@ -1,31 +1,48 @@
-# Collie Kart P007b.2 — Endpoint-aware stopping and true route progress
+# Collie Kart P008 — Independent Learning v1 (EXPERIMENTAL)
 
-**Compiled source is experimental; real-hardware validation is still required.** Based on successful P007b.1 autonomous attempt #001 using the user's manual `demo_003.csv`. Preserve P006.4 (four control verification), P007a.1 (validated manual recorder) and P007b.1 (first successful AI hardware drive).
+**Target:** MK7 USA Rev 2 on a physical New Nintendo 3DS, offline Time Trial only. **Compiled via GitHub Actions; autonomous hardware testing is not yet performed.**
 
-## Why this change
-- Hardware observed: P007b.1 closely reproduced the path then crept beyond the demonstrated stop and steered sharply left.
-- Attempt CSV: came to ~6.2 game units from destination at 9.66s, speed ~0.39, but old index-based completion condition remained at waypoint 17/22. At 9.86s was only 1.5 units away, then steered to stick=1 and missed finish. Old 82% route completion was misreported due to stationary trailing waypoints.
-- The AI already learned and issued 718 synthetic input frames without read/write failures. This release addresses **terminal recognition**, not a failed input hook.
+This branch preserves the entire P007b.2 route-guided AI and controller safety system and adds a **distinct route-free reinforcement-learning controller**.
 
-## What changed
-1. **Arc-length route progress:** matches projection to forward route segments, computes cumulative distance fraction, and displays progress based on traveled path distance, not total number of waypoints.
-2. **Stationary endpoint detection:** only when the demonstration's last recorded speed is near zero; gate on >=80% route progress and distance from the actual endpoint. Finishes when within **8 game-coordinate units and speed <=0.6**; stops all synthetic inputs before publishing another action.
-3. **Low-speed final approach:** from within 85 units of the endpoint at >=80% progress, automatically reduces target speed as distance shrinks; chooses brake or neutral rather than oscillating acceleration/brake at the stop. Steering recenters inside the final 28 units. Avoids braking below 0.35 speed because B may become reverse.
-4. **Overshoot cutoff:** if final approach was activated but the kart moves >110 units away near route end, automatically stops with a specific failure reason instead of chasing a ghost waypoint.
-5. **Detailed diagnostics:** last and closest endpoint distances, time of closest approach, final speed, final-approach frame count, plus per-decision route progress, distance-to-end, and desired speed. **Retains all six independent attempt records and SAVE ALL CSVs.**
+## What works in source
 
-## Suggested first hardware check
-1. Back up validated P007b.1 and P006.4. Power off New Nintendo 3DS and copy `CollieKart.3gx` to `SD:/luma/plugins/0004000000030800/`.
-2. Start **MK7 USA Rev2 offline Toad Circuit Time Trial only**. READY ON. Load `demo_003.csv` (if necessary rename/copy as latest `demo_###.csv`), TRAIN model.
-3. Install pass-through native hook; manually verify normal controls, 30+ player callbacks, 10+ physical A frames, 0 read/write faults. Complete safety dry-run and a separate B-aborted run.
-4. Return stationary to approximately the original start. Use initial **12-second maximum**. Queue AI attempt, close CTRPF, unpause MK7 early in countdown, release controls to neutral. Keep the 3DS supervised.
-5. After attempt, view AI reports and check: stop reason `FINISHED ROUTE`, 100% route if destination actually reached, final endpoint distance, last speed, native frames, zero faults. **No claim of physical standstill solely from stopping input**: momentum can still cause a little coast after disengagement.
-6. Save individual attempt CSVs through SAVE ALL. Can retain six attempts in RAM before clearing saved batch. Share at least the first CSV and report screenshot for review.
-7. If steering behaves unexpectedly, kart runs past endpoint, game slows/freezes, or controller release fails, end session and restore P007b.1 or P006.4.
+- Driving mode switch: MANUAL -> GUIDED -> TRAIN -> EVALUATE -> MANUAL (default at boot GUIDED).
+- GUIDED runs the prior P007b.2 model and recorded demo. TRAIN and EVALUATE do **not** consult human demonstration waypoints or Nintendo CPU waypoints.
+- Nine bounded discrete action choices with existing CTRPF native `KDPadInputer` passthrough hook: A straight/gentle L/R/hard L/R, coast, B straight/L/R. The plugin makes no unverified native collision calls.
+- Online semi-gradient SARSA(0) action-value updates in TRAIN; no exploration or model updates in EVALUATE. Hashed, bounded state features; world coordinates excluded from the policy to avoid automatic coordinate lookup.
+- Current live observation candidates: speed, speed vector (for sideslip), kart-facing vector at Vehicle+0xF44, yaw strength, current road collision class, wall-contact flag, race/lap progress and mode.
+- Reward from legitimate max progress and real lap transitions, with time cost, wall-contact penalty, reverse-direction penalty and prolonged-stagnation penalty. Evaluation uses the same reward but leaves policy unchanged.
+- Six independent flight-recording attempts with CSV export `/CollieKart/ind_attempt_###.csv`, policy update counters and exploration flags.
+- Versioned, checksummed and non-overwriting `/CollieKart/ind_model_###.csv` policy snapshots. Save after stopping and reload newest valid snapshot. Policy resets in RAM only.
+- Native physical override, five-second release/countdown, pause rejection, command expiry, input-fault abort, fixed runtime cap and exact observed lap-transition stopping.
 
-## Development limits and scoring honesty
-- Travel heading is still displacement-based, not calibrated kart-facing yaw.
-- No automatic game mode/revision verifier beyond MK7 USA title ID; manual offline Time Trial restriction is mandatory.
-- The stop is defined as arriving slowly and **releasing AI control**, not guaranteeing the virtual kart is immobile. The first attempt after this patch must validate coast/stop behavior.
-- A higher route-progress percentage from the corrected metric is not proof of model improvement. Compare geometric error, closest endpoint, final speed and human-observed behavior across runs.
-- Scores still reflect a simplified path-error/progress objective. Never label this as a guaranteed full-lap capability.
+## NOT working/proven yet
+
+- **360-degree KCL collision raycasts are NOT implemented.** Twelve-direction radar fields are explicitly invalid; no dummy distance readings are supplied. Collision-manager pointer is read-only and does not give us lookahead by itself.
+- New facing, sideslip, surface, wall and collision-manager reads are **research candidates**. The physical 3DS needs to validate their values; invalid facing causes independent driving to refuse/stop.
+- Compilation success is **not** verification of memory safety, framerate, controller behavior, sensor fidelity, policy effectiveness, a completed autonomous lap, or learning improvement.
+- Without look-ahead, the policy has limited ability to anticipate corners. This release validates the end-to-end *learning mechanism* and behavior, not general driving competency.
+- No automatic SD saving while the kart moves; use explicit SAVE model menu after each finished training batch.
+
+## Recommended first hardware test
+
+1. **Back up your working P007b.2 plugin** and the SD card. Copy the new `CollieKart.3gx` to `SD:/luma/plugins/0004000000030800/CollieKart.3gx` while the console is powered off.
+2. Enter MK7 USA Rev 2 **offline Toad Circuit Time Trial**. Enable READY. Install native PASS-THROUGH hook. Confirm manual A and steering are unchanged, the native diagnostics show zero read/write faults, and redo dry-run plus physical B-abort preflight for this build.
+3. Run **P008: READ-ONLY sensor preflight** while at rest and after manually sampling normal asphalt and grass/wall areas. Check facing VALID (and its direction), sensible speed, road surface and wall flags. Expect `RADAR UNAVAILABLE`. **If facing is invalid or data is implausible, STOP and report; do not attempt AI driving.**
+4. P008 mode starts GUIDED. Select **P008: Cycle driver MODE** *once* to TRAIN. Position kart stationary at a normal Toad Circuit start. No demonstration needs to be loaded or recorded.
+5. Select **P008: START independent attempt**, close CTRPF, resume MK7, release buttons and center Circle Pad before the five-second neutral check ends. The first independent attempt has a **12-second** maximum; supervise continuously. Physical control aborts artificial commands.
+6. After the attempt, open **P008: Independent learning report**. Check startup, actual native frames, policy update count, exploration rate, final progress, reward and failure reason. Save attempt CSVs, and separately **SAVE learned model** to preserve policy state.
+7. Attempt another TRAIN run from approximately the same start and compare traces. Then cycle mode to EVALUATE to disable exploration and policy updates, and assess reproducibility. Evidence of better driving requires multiple comparable trials, not merely changed weights.
+8. If the game slows, glitches, crashes, or releases controls incorrectly, stop, power off and restore your validated P007b.2 plugin.
+
+## Design philosophy
+
+Train a **learned action policy** from the agent's own sensor observations and consequent reward. Do not hard-code Nintendo CPU racing routes, human sample waypoints, ideal steering instructions, or future checkpoint coordinates into the independent controller. Route progress is a **training grade**, not an instruction.
+
+## Sources
+
+- [MK7-Memory VehicleMove](https://github.com/mk7re/MK7-Memory/blob/master/template/Kart/Vehicle/VehicleMove.hpp)
+- [MK7-Memory LapRankChecker](https://github.com/mk7re/MK7-Memory/blob/master/template/RaceSys/LapRankChecker.hpp)
+- [MK7 emulator collision/vehicle script](https://github.com/mk7re/MK7-Emu-Scripts/blob/main/Vehicle.py)
+- [Native collision manager pointer documented](https://github.com/mk7re/MK7-Memory/blob/master/template/Object/CharacterEngine.hpp)
+- [Independent KCL collision query reference, not integrated](https://github.com/PabloMK7/YAMKC_3DS/blob/main/source/KCollisionServer.cpp)
