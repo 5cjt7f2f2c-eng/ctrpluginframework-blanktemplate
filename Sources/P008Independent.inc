@@ -73,6 +73,8 @@ static unsigned g_indCount=0,g_indUpdates=0,g_indPolicyVersion=0;
 static float g_indWeights[IND_ACTIONS][IND_HASH]={};
 static bool g_indModelDirty=false;
 static unsigned g_indStartCalls=0,g_indDenials=0,g_indSensorFailures=0;
+// Distinguish observation-read failure, heading failure, coordinate jump and timing stall.
+static unsigned g_indReadFailures=0,g_indFacingFailures=0,g_indWarpFailures=0,g_indTimingFailures=0;
 static u32 g_indRng=0x21AD489Bu;
 static u64 g_indWaitAt=0,g_indNeutralAt=0,g_indStarted=0,g_indLastTick=0;
 static u32 g_indFrameStart=0,g_indFaultStart=0,g_indLimit=12000;
@@ -442,24 +444,24 @@ void IndStep(u64 now,bool menuOpen) {
     if(g_indLastTick&&now>=g_indLastTick&&
        now-g_indLastTick<IND_TICK_MS)return;
     if(g_indLastTick&&(now<g_indLastTick||now-g_indLastTick>400)) {
-        IndStopNow(IND_BAD_SENSOR);return;
+        ++g_indTimingFailures;IndStopNow(IND_BAD_SENSOR);return;
     }
     g_indLastTick=now;
     if(g_indCount>=IND_ATTEMPTS){IndStopNow(IND_BUFFER);return;}
     IndAttempt &a=g_indAttempts[g_indCount];
     if(a.count>=IND_TICKS){IndStopNow(IND_BUFFER);return;}
     IndSensor s;
-    if(!IndObserve(s)){++g_indSensorFailures;IndStopNow(IND_BAD_SENSOR);return;}
+    if(!IndObserve(s)){++g_indSensorFailures;++g_indReadFailures;IndStopNow(IND_BAD_SENSOR);return;}
     if(!s.faceValid) {
         // Valid forward direction is mandatory for the first autonomous
         // release. Falling back to a demo heading is forbidden.
-        ++g_indSensorFailures;IndStopNow(IND_BAD_SENSOR);return;
+        ++g_indSensorFailures;++g_indFacingFailures;IndStopNow(IND_BAD_SENSOR);return;
     }
     // Detect implausible coordinate discontinuities (rescue/warp) and stop;
     // do not train on reward across teleport-like transitions.
     const float dx=s.x-g_indLastSensor.x,dz=s.z-g_indLastSensor.z;
     if(dx*dx+dz*dz>250000.0f){
-        ++g_indSensorFailures;IndStopNow(IND_BAD_SENSOR);return;
+        ++g_indSensorFailures;++g_indWarpFailures;IndStopNow(IND_BAD_SENSOR);return;
     }
     const bool training=g_indMode==IND_TRAIN;
     bool lapFinished=false;
@@ -574,12 +576,14 @@ void IndReport(MenuEntry *) {
         "Started/denied %u/%u | captured %u/%u\n"
         "Policy v%u | updates %u | dirty %s\n"
         "Last end: %s | sensor failures: %u\n"
+        "Failures: read %u, face %u, warp %u, timing %u\n"
         "RADAR UNAVAILABLE: 0/12 (not invented)\n",
         IndModeName(g_indMode),static_cast<int>(g_indPhase),
         static_cast<unsigned long>(g_indLimit/1000),
         g_indStartCalls,g_indDenials,g_indCount,IND_ATTEMPTS,
         g_indPolicyVersion,g_indUpdates,g_indModelDirty?"YES":"NO",
-        IndStopName(g_indLastReason),g_indSensorFailures);
+        IndStopName(g_indLastReason),g_indSensorFailures,
+        g_indReadFailures,g_indFacingFailures,g_indWarpFailures,g_indTimingFailures);
     msg=b;
     for(unsigned i=0;i<g_indCount;++i) {
         const IndAttempt &a=g_indAttempts[i];
