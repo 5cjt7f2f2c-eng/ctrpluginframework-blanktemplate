@@ -275,6 +275,14 @@ void IndCycleMode(MenuEntry *) {
        "\nMANUAL: no AI. GUIDED: proven P007.\n"
        "TRAIN: independent learning. EVALUATE: no policy updates.")();
 }
+void IndGuidedQueue(MenuEntry *entry) {
+    if(g_indMode!=IND_GUIDED) {
+        MessageBox("GUIDED mode required",
+          "Cycle P008 mode to GUIDED to run P007b.2.")();
+        return;
+    }
+    AiQueueAttempt(entry);
+}
 void IndStart(MenuEntry *) {
     if((g_indMode!=IND_TRAIN && g_indMode!=IND_EVAL)||
        !g_ready||g_indPhase==IND_WAIT||g_indPhase==IND_DRIVE||
