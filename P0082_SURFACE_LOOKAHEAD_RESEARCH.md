@@ -27,3 +27,16 @@ The game owns its loaded course data. We are exposing *read-only perception*, **
 - https://github.com/mk7re/MK7-Emu-Scripts/blob/main/common.py
 - https://github.com/mk7re/MK7-Emu-Scripts/blob/main/VehicleCurrentCollisionInfo.py
 - https://github.com/mk7re/MK7-Memory/blob/master/template/Field/Entry/CheckPoint.hpp
+
+## 2026-10-20 KDGndCol interface investigation
+
+The public `mk7re/MK7-Memory` repository documents `KDGndCol::CheckIF` (0x10 bytes): `m_manager` at +0x0 inherited from `NarrowIF`, `m_collision_result` at +0x4, `m_hit_info` at +0x8, and `m_block_cache` at +0xC. The comment explicitly identifies `KDGndCol::Manager::checkSphere` as the producer of `m_collision_result`. `HitInfoImpl` (0xB0 bytes) stores `m_collision_flags` at +0xA4 and `m_collision_result` at +0xA8, plus ground-normal vector at +0x28. These are **structure layouts**, not verified physical-memory addresses or an executable ABI.
+
+The available indexed public sources do **not** provide a callable USA Rev2 address, signature, calling convention, lifetime rules, or a proven safe way to construct `CheckIF` and `HitInfo` for an independent query. Therefore the native query **is not yet authorized for hardware testing**. The successful physical S1 ROAD/DIRT reads validate the existing contact sensor, not remote surface look-ahead.
+
+Research path: obtain USA Rev2 disassembly or symbol/map material; locate call sites to `Manager::checkSphere`, recover arguments and collision mask, inspect construction/ownership of `CheckIF`/`HitInfo`, confirm loaded manager pointer, and run bounded **read-only pointer-only** diagnostics before any call. Alternative is a validated loaded-KCL spatial query using height-aware ray intersections, without calling game functions.
+
+References:
+- https://github.com/mk7re/MK7-Memory/blob/master/template/KDGndCol/CheckIF.hpp
+- https://github.com/mk7re/MK7-Memory/blob/master/template/KDGndCol/HitInfoImpl.hpp
+- https://github.com/mk7re/MK7-Memory/blob/master/template/KDGndCol/NarrowIF.hpp
