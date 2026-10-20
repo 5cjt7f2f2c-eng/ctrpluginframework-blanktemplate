@@ -2831,39 +2831,12 @@ namespace CTRPluginFramework
         menu.ShowWelcomeMessage(false);
         menu += new MenuEntry("Toggle READY / INACTIVE", nullptr, ToggleReady,
             "Master toggle for read-only observation and demonstration capture.");
-        // P007a is RECORD-ONLY. No synthetic input menu actions.
-        menu += new MenuEntry("1: START manual demonstration", nullptr, StartDemo,
-            "20Hz target in-RAM recording. Drive manually, no AI input.");
-        menu += new MenuEntry("2: STOP & ANALYZE demonstration", nullptr, StopAnalyzeDemo,
-            "Stop recording; extract reference path in RAM.");
-        menu += new MenuEntry("3: DEMO diagnostics", nullptr, DemoDiagnostics,
-            "Sample rate, input count, distance and motion-heading quality.");
-        menu += new MenuEntry("4: SAVE demo CSV to SD", nullptr, SaveDemoCSV,
-            "Write new SD:/CollieKart/demo_###.csv after stopping.");
-        menu += new MenuEntry("5: DISCARD demo in RAM", nullptr, DiscardDemo,
-            "Clears the RAM buffer only; existing SD files are untouched.");
-        menu += new MenuEntry("6: LOAD latest demonstration CSV", nullptr, AiLoadNewestDemo,
-            "Load highest-numbered SD:/CollieKart/demo_###.csv.");
-        menu += new MenuEntry("7: TRAIN model on 3DS", nullptr, AiTrain,
-            "Learn steering relationship from demonstration.");
-        menu += new MenuEntry("8: Install native PASS-THROUGH hook", nullptr, HookPassThrough,
-            "Requires READY and manual input validation first.");
-        menu += new MenuEntry("9: Native input diagnostics", nullptr, NativeHookDiagnostics,
-            "Check callbacks, manual A, and zero native faults.");
-        menu += new MenuEntry("10: 5s SAFETY dry run", nullptr, QueueDryRun,
-            "Complete one dry run; repeat and physically B-abort to certify.");
-        menu += new MenuEntry("11: START guided P007 attempt", nullptr, IndGuidedQueue,
-            "Only in GUIDED mode. Requires demo and certified native actuator.");
-        menu += new MenuEntry("12: CHANGE max AI duration", nullptr, AiCycleLimit,
-            "Cycle 12, 30, 75 and 120 seconds. Always supervise.");
-        menu += new MenuEntry("13: ABORT AI attempt", nullptr, AiAbortMenu,
-            "Immediately drop artificial control authority.");
-        menu += new MenuEntry("14: AI attempt reports / startup diagnostics", nullptr, AiAttemptReport,
-            "Show countdown status, abort reasons and multi-attempt metrics.");
-        menu += new MenuEntry("15: SAVE ALL attempt CSV files", nullptr, AiSaveAll,
-            "Separate uniquely numbered CSV for each attempt, after driving.");
-        menu += new MenuEntry("16: CLEAR saved attempt batch", nullptr, AiClearSaved,
-            "Requires all attempts saved; retains loaded demo and trained model.");
+        // P008.1 primary workflow. Legacy P006/P007 debug and guided
+        // menus are deliberately omitted, not merely renamed.
+        menu += new MenuEntry("P008.1: Install native controller hook", nullptr, HookPassThrough,
+            "Install pass-through native hook. Requires READY and valid manual input. No dry-run certification.");
+        menu += new MenuEntry("P008.1: Native controller status", nullptr, NativeHookDiagnostics,
+            "Check hook frames and native input faults. Physical abort remains available.");
         menu += new MenuEntry("P008.1: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
         menu += new MenuEntry("P008.1: READ-ONLY sensor preflight", nullptr, IndSensors,
@@ -2886,33 +2859,7 @@ namespace CTRPluginFramework
             "Restore newest valid checksummed model, skipping partial snapshots.");
         menu += new MenuEntry("P008.1: RESET model in RAM", nullptr, IndResetModel,
             "Zero learned weights; existing SD model backups remain untouched.");
-        menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
-            "Status of the last attempted telemetry probe.");
-        menu += new MenuEntry("Read telemetry snapshot", nullptr, Snapshot,
-            "Attempt a single read-only game-memory snapshot.");
-        menu += new MenuEntry("Toggle live telemetry", nullptr, ToggleLive,
-            "Opt-in sampled observations, only while READY.");
-        menu += new MenuEntry("Environment & rewards", nullptr, ShowEnvironment,
-            "Inspect grounded/gliding modes, fused pad signals, brake evidence and rewards.");
-        menu += new MenuEntry("Toggle READ-ONLY input trace", nullptr, ToggleInputTrace,
-            "Sample MK7 player KDPad and vehicle controls without writing memory.");
-        menu += new MenuEntry("Input pipeline diagnostics", nullptr, InputTraceDiagnostics,
-            "Check physical A, KDPad A and vehicle acceleration matches.");
-        menu += new MenuEntry("Toggle NATIVE setter preflight", nullptr, ToggleSetterPreflight,
-            "Read-only inspect the MK7 pad subsystem chain at up to 5Hz.");
-        menu += new MenuEntry("Native setter diagnostics", nullptr, ShowSetterPreflight,
-            "Check pad add-in chain validity and candidate native setter state.");
-
-
-        menu += new MenuEntry("Start recording", nullptr, StartRecording,
-            "Begin buffering telemetry in RAM. Requires READY.");
-        menu += new MenuEntry("Stop & Save CSV", nullptr, StopAndSave,
-            "Stop capturing and save a new CSV under SD:/CollieKart.");
-        menu += new MenuEntry("Toggle performance profiler", nullptr, ToggleProfiler,
-            "Read-only OSD callback, full-probe and environment timings.");
-        menu += new MenuEntry("Profiler & control diagnostics", nullptr, ShowProfiler,
-            "Frame callback timing, experimental control status and abort reason.");
-        // No HID injection. Four controlled tests, never automatic driving.
+        // P008.1 supervised native independent learning.
         OSD::Run(DrawStatus);
         menu.Run();
         g_aiAuthority.store(false,std::memory_order_release);
