@@ -618,6 +618,48 @@ void IndSurfaceSnapshot(MenuEntry *) {
         rawOk?names[type]:"UNKNOWN");
     MessageBox("P008.2-S1 live surface snapshot",msg)();
 }
+// S2 research: validate live KDGndCol manager ownership, NO function calls.
+void IndCollisionManagerSnapshot(MenuEntry *) {
+    if (g_indPhase==IND_WAIT || g_indPhase==IND_DRIVE ||
+        g_aiPhase==AI_RUNNING || g_aiPhase==AI_COUNTDOWN) {
+        MessageBox("Manager probe locked",
+            "Stop autonomous/guided attempts first. Manual-only read.")();
+        return;
+    }
+    if (!g_verified || Process::GetTitleID()!=MK7_USA) {
+        MessageBox("Manager probe unavailable","MK7 USA only.")();
+        return;
+    }
+    u32 sceneMgr=0,scene=0,encoded=0,engine=0,list=0,manager=0;
+    unsigned stage=0;
+    if (!ReadPointer(ROOTSYSTEM_USA_REV2+4,sceneMgr))stage=1;
+    else if (!ReadPointer(sceneMgr+4,scene))stage=2;
+    else if (!ReadWord(scene+0x1E4,encoded))stage=3;
+    else {
+        engine=encoded^ENGINE_XOR;
+        if (!PlausibleAddress(engine) ||
+            !Process::CheckAddress(engine+0x1C,MEMPERM_READ))stage=4;
+        else if (!ReadPointer(engine+0x1C,list))stage=5;
+        else if (!ReadPointer(list+0x08,manager))stage=6;
+    }
+    const bool valid=stage==0 && Process::CheckAddress(manager,MEMPERM_READ);
+    char msg[350];
+    std::snprintf(msg,sizeof(msg),
+        "Chain: %s (stage %u)\n"
+        "CharacterEngine: 0x%08lX\n"
+        "Director list: 0x%08lX\n"
+        "KDGndCol manager: 0x%08lX\n"
+        "Manager readable: %s\n"
+        "NO checkSphere call performed.\n"
+        "NO look-ahead result available.\n"
+        "READ ONLY; USA Rev2 hardware probe.",
+        stage==0?"RESOLVED":"FAILED",stage,
+        static_cast<unsigned long>(engine),
+        static_cast<unsigned long>(list),
+        static_cast<unsigned long>(manager),
+        valid?"YES":"NO");
+    MessageBox("P008.2-S2 manager pointer",msg)();
+}
 void IndReport(MenuEntry *) {
     char b[280];
     std::string msg;
