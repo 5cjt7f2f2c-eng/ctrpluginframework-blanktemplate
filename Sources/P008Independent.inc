@@ -568,6 +568,56 @@ void IndSensors(MenuEntry *) {
         static_cast<unsigned long>(s.manager));
     MessageBox("P008.1 checkpoint sensor diagnostic",b)();
 }
+// S1 first-contact: read-only snapshot of MK7's active collision state.
+// This address is from mk7re's USA Rev2 Citra reference; hardware is unverified.
+// S2 look-ahead remains UNKNOWN until a native query ABI is validated.
+void IndSurfaceSnapshot(MenuEntry *) {
+    g_aiAuthority.store(false,std::memory_order_release);
+    if (g_indPhase==IND_WAIT || g_indPhase==IND_DRIVE ||
+        g_aiPhase==AI_RUNNING || g_aiPhase==AI_COUNTDOWN) {
+        MessageBox("Surface diagnostic locked",
+            "Stop autonomous/guided driving before inspecting collision memory.")();
+        return;
+    }
+    if (!g_verified || Process::GetTitleID()!=MK7_USA) {
+        MessageBox("Surface diagnostic unavailable",
+            "Only MK7 USA is supported by this diagnostic.")();
+        return;
+    }
+    constexpr u32 slot=0x0065C584u;
+    u32 ptr=0,flags=0,rawWord=0;
+    const bool slotOk=ReadWord(slot,ptr);
+    const bool ptrOk=slotOk && PlausibleAddress(ptr) &&
+        Process::CheckAddress(ptr,MEMPERM_READ) &&
+        Process::CheckAddress(ptr+12,MEMPERM_READ);
+    const bool flagsOk=ptrOk && ReadWord(ptr,flags);
+    // Read a 32-bit word at +4 to avoid unverified Read16 API usage.
+    const bool rawOk=flagsOk && ReadWord(ptr+4,rawWord);
+    const u16 raw=static_cast<u16>(rawWord&0xFFFFu);
+    const unsigned type=raw&31u;
+    static const char* names[32]={
+        "ROAD","ROAD2","ROAD3","SAND","LDIRT","DIRT","HDIRT","ICE",
+        "DASH","GLIDE","ITROAD","RESQ","PULL","LAROAD","BELT","DUMMY0",
+        "WALL","WALL2","OUTF","ITWALL","LWALL","BWALL","OUTMH","DUMMY1",
+        "DUMMY2","VALLEY","TRIGGER","SOUND","CANNON","VALLEY2",
+        "DUMMY3","ZONE"};
+    char msg[430];
+    std::snprintf(msg,sizeof(msg),
+        "Slot 0x%08lX: %s\\n"
+        "Object 0x%08lX: %s\\n"
+        "Collision flags: %s 0x%08lX\\n"
+        "Raw flags: %s 0x%04X\\n"
+        "Base type: %s\\n"
+        "LOOK-AHEAD: UNKNOWN (not queried)\\n"
+        "READ ONLY. Manual driving only.\\n"
+        "Citra-derived address: hardware validation required.",
+        static_cast<unsigned long>(slot),slotOk?"READ":"INVALID",
+        static_cast<unsigned long>(ptr),ptrOk?"VALID PTR":"INVALID",
+        flagsOk?"READ":"INVALID",static_cast<unsigned long>(flags),
+        rawOk?"READ":"INVALID",rawOk?raw:0,
+        rawOk?names[type]:"UNKNOWN");
+    MessageBox("P008.2-S1 live surface snapshot",msg)();
+}
 void IndReport(MenuEntry *) {
     char b[280];
     std::string msg;
