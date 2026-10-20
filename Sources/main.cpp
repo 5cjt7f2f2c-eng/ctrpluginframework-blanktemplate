@@ -2864,27 +2864,27 @@ namespace CTRPluginFramework
             "Separate uniquely numbered CSV for each attempt, after driving.");
         menu += new MenuEntry("16: CLEAR saved attempt batch", nullptr, AiClearSaved,
             "Requires all attempts saved; retains loaded demo and trained model.");
-        menu += new MenuEntry("P008: Cycle driver MODE", nullptr, IndCycleMode,
+        menu += new MenuEntry("P008.1: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
-        menu += new MenuEntry("P008: READ-ONLY sensor preflight", nullptr, IndSensors,
-            "Check facing, wall, road, progress, manager pointer. No active rays yet.");
-        menu += new MenuEntry("P008: START independent attempt", nullptr, IndStart,
-            "Only TRAIN/EVALUATE. NO route used. Requires native actuator preflight.");
-        menu += new MenuEntry("P008: Change independent duration", nullptr, IndCycleLimit,
+        menu += new MenuEntry("P008.1: READ-ONLY sensor preflight", nullptr, IndSensors,
+            "Check facing, wall, road, progress, checkpoint heading/index. No active rays yet.");
+        menu += new MenuEntry("P008.1: START independent attempt", nullptr, IndStart,
+            "Only TRAIN/EVALUATE. NO route used. Requires healthy native hook; physical override/watchdog retained.");
+        menu += new MenuEntry("P008.1: Change independent duration", nullptr, IndCycleLimit,
             "Cycle 12/30/75/120 seconds. Unverified policy. Supervise.");
-        menu += new MenuEntry("P008: ABORT independent attempt", nullptr, IndAbort,
+        menu += new MenuEntry("P008.1: ABORT independent attempt", nullptr, IndAbort,
             "Immediately revoke native controller authority.");
-        menu += new MenuEntry("P008: Independent learning report", nullptr, IndReport,
+        menu += new MenuEntry("P008.1: Independent learning report", nullptr, IndReport,
             "See mode, policy updates, reward and all six attempt summaries.");
-        menu += new MenuEntry("P008: SAVE independent attempt CSVs", nullptr, IndSaveAttempts,
+        menu += new MenuEntry("P008.1: SAVE independent attempt CSVs", nullptr, IndSaveAttempts,
             "Store detailed actions, exploration, Q and reward after stopping.");
-        menu += new MenuEntry("P008: CLEAR saved independent attempts", nullptr, IndClear,
+        menu += new MenuEntry("P008.1: CLEAR saved independent attempts", nullptr, IndClear,
             "Clear only saved RAM attempt logs; preserve the learned model.");
-        menu += new MenuEntry("P008: SAVE learned model", nullptr, IndSaveModel,
+        menu += new MenuEntry("P008.1: SAVE learned model", nullptr, IndSaveModel,
             "Write an immutable checksummed numbered model snapshot to SD.");
-        menu += new MenuEntry("P008: LOAD latest valid model", nullptr, IndLoadModel,
+        menu += new MenuEntry("P008.1: LOAD latest valid model", nullptr, IndLoadModel,
             "Restore newest valid checksummed model, skipping partial snapshots.");
-        menu += new MenuEntry("P008: RESET model in RAM", nullptr, IndResetModel,
+        menu += new MenuEntry("P008.1: RESET model in RAM", nullptr, IndResetModel,
             "Zero learned weights; existing SD model backups remain untouched.");
         menu += new MenuEntry("Show diagnostics", nullptr, ShowDiagnostics,
             "Status of the last attempted telemetry probe.");
