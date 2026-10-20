@@ -102,7 +102,7 @@ u16 IndHash(int channel,int value,int offset) {
     return static_cast<u16>(h%IND_HASH);
 }
 // Bounded, readonly. Never assume a failed sensor means empty space.
-bool IndObserve(IndSensor &s) {
+bool IndObserve(IndSensor &s,bool requireUnpaused=true) {
     s=IndSensor();
     if(!g_observation.candidate || !g_vehicleAddress || !g_demoKartAddress)
         return false;
@@ -115,7 +115,7 @@ bool IndObserve(IndSensor &s) {
        !ReadWord(g_demoKartAddress+0x1C,s.lap)||
        !ReadWord(g_demoKartAddress+0x24,s.flags)||
        !ReadPointer(g_vehicleAddress+0xE0,pad)||
-       !Process::Read8(pad+0x3D,paused) || paused)
+       !Process::Read8(pad+0x3D,paused) || (requireUnpaused&&paused))
         return false;
     if(!std::isfinite(s.x)||!std::isfinite(s.z)||
        !std::isfinite(s.speed)||!std::isfinite(s.progress)||
@@ -297,7 +297,7 @@ void IndStart(MenuEntry *) {
     }
     Probe();
     IndSensor s;
-    if(!IndObserve(s)||std::fabs(s.speed)>.35f) {
+    if(!IndObserve(s,false)||std::fabs(s.speed)>.35f) {
         ++g_indDenials;
         MessageBox("Invalid race start",
            "Park stationary in an unpaused offline MK7 USA Time Trial."
@@ -390,16 +390,21 @@ void IndStep(u64 now,bool menuOpen) {
     a.reward+=reward;
     if(s.maximum>a.bestProgress)a.bestProgress=s.maximum;
     g_indLastReward=reward;g_indLastSensor=s;
+    if(lapFinished) {
+        // Terminal SARSA update uses the lap reward, without bootstrapping
+        // from an action that will never execute.
+        if(g_indPrevious&&training)
+            IndUpdate(g_indPrevFeatures,g_indPrevAction,reward,0);
+        g_indPrevious=false;
+        IndStopNow(IND_LAP);
+        return;
+    }
     u16 features[IND_FEATURES];
     IndFeatures(s,features);
     bool explored=false;float q=0;
     const u8 action=IndSelect(features,training,explored,q);
     if(g_indPrevious&&training)
         IndUpdate(g_indPrevFeatures,g_indPrevAction,reward,q);
-    if(lapFinished) {
-        // End independent one-lap test on MK7's real lap transition.
-        IndStopNow(IND_LAP);return;
-    }
     if(g_indNoAdvance>270){IndStopNow(IND_BAD_SENSOR);return;}
     IndDecision &d=a.log[a.count++];
     d.t=static_cast<u32>(now-g_indStarted);
@@ -436,7 +441,7 @@ void IndAbort(MenuEntry *) {
 }
 void IndSensors(MenuEntry *) {
     Probe();IndSensor s;
-    const bool ok=IndObserve(s);
+    const bool ok=IndObserve(s,false);
     g_indLastSensor=s;
     char b[550];
     std::snprintf(b,sizeof(b),
