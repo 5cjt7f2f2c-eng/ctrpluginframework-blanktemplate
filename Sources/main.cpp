@@ -2824,8 +2824,8 @@ namespace CTRPluginFramework
         if (!g_verified)
             return 0;
 
-        PluginMenu menu("Collie Kart P008.1 - CK81-1020B", 0, 0, 81,
-            "CK81-1020B | held-action learning + checkpoint diagnostics.\n"
+        PluginMenu menu("Collie Kart P008.2a - CK82-1020A", 0, 0, 81,
+            "CK82-1020A | track-heading features; corridor map pending.\n"
             "Offline MK7 USA Rev2 Time Trial ONLY. Controller OFF at boot.");
         menu.SynchronizeWithFrame(true);
         menu.ShowWelcomeMessage(false);
@@ -2833,31 +2833,31 @@ namespace CTRPluginFramework
             "Master toggle for read-only observation and demonstration capture.");
         // P008.1 primary workflow. Legacy P006/P007 debug and guided
         // menus are deliberately omitted, not merely renamed.
-        menu += new MenuEntry("P008.1: Install native controller hook", nullptr, HookPassThrough,
+        menu += new MenuEntry("P008.2a: Install native controller hook", nullptr, HookPassThrough,
             "Install pass-through native hook. Requires READY and valid manual input. No dry-run certification.");
-        menu += new MenuEntry("P008.1: Native controller status", nullptr, NativeHookDiagnostics,
+        menu += new MenuEntry("P008.2a: Native controller status", nullptr, NativeHookDiagnostics,
             "Check hook frames and native input faults. Physical abort remains available.");
-        menu += new MenuEntry("P008.1: Cycle driver MODE", nullptr, IndCycleMode,
+        menu += new MenuEntry("P008.2a: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
-        menu += new MenuEntry("P008.1: READ-ONLY sensor preflight", nullptr, IndSensors,
+        menu += new MenuEntry("P008.2a: READ-ONLY sensor preflight", nullptr, IndSensors,
             "Check facing, wall, road, progress, checkpoint heading/index. No active rays yet.");
-        menu += new MenuEntry("P008.1: START independent attempt", nullptr, IndStart,
+        menu += new MenuEntry("P008.2a: START independent attempt", nullptr, IndStart,
             "Only TRAIN/EVALUATE. NO route used. Requires healthy native hook; physical override/watchdog retained.");
-        menu += new MenuEntry("P008.1: Change independent duration", nullptr, IndCycleLimit,
+        menu += new MenuEntry("P008.2a: Change independent duration", nullptr, IndCycleLimit,
             "Cycle 12/30/75/120 seconds. Unverified policy. Supervise.");
-        menu += new MenuEntry("P008.1: ABORT independent attempt", nullptr, IndAbort,
+        menu += new MenuEntry("P008.2a: ABORT independent attempt", nullptr, IndAbort,
             "Immediately revoke native controller authority.");
-        menu += new MenuEntry("P008.1: Independent learning report", nullptr, IndReport,
+        menu += new MenuEntry("P008.2a: Independent learning report", nullptr, IndReport,
             "See mode, policy updates, reward and all six attempt summaries.");
-        menu += new MenuEntry("P008.1: SAVE independent attempt CSVs", nullptr, IndSaveAttempts,
+        menu += new MenuEntry("P008.2a: SAVE independent attempt CSVs", nullptr, IndSaveAttempts,
             "Store detailed actions, exploration, Q and reward after stopping.");
-        menu += new MenuEntry("P008.1: CLEAR saved independent attempts", nullptr, IndClear,
+        menu += new MenuEntry("P008.2a: CLEAR saved independent attempts", nullptr, IndClear,
             "Clear only saved RAM attempt logs; preserve the learned model.");
-        menu += new MenuEntry("P008.1: SAVE learned model", nullptr, IndSaveModel,
+        menu += new MenuEntry("P008.2a: SAVE learned model", nullptr, IndSaveModel,
             "Write an immutable checksummed numbered model snapshot to SD.");
-        menu += new MenuEntry("P008.1: LOAD latest valid model", nullptr, IndLoadModel,
+        menu += new MenuEntry("P008.2a: LOAD latest valid model", nullptr, IndLoadModel,
             "Restore newest valid checksummed model, skipping partial snapshots.");
-        menu += new MenuEntry("P008.1: RESET model in RAM", nullptr, IndResetModel,
+        menu += new MenuEntry("P008.2a: RESET model in RAM", nullptr, IndResetModel,
             "Zero learned weights; existing SD model backups remain untouched.");
         // P008.1 supervised native independent learning.
         OSD::Run(DrawStatus);
