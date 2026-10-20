@@ -2839,6 +2839,8 @@ namespace CTRPluginFramework
             "Check hook frames and native input faults. Physical abort remains available.");
         menu += new MenuEntry("P008.2a: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
+        menu += new MenuEntry("P008.2-S2: READ-ONLY collision manager", nullptr, IndCollisionManagerSnapshot,
+            "Manual only. Validate CharacterEngine to KDGndCol manager pointer; no game function calls.");
         menu += new MenuEntry("P008.2-S1: READ-ONLY surface snapshot", nullptr, IndSurfaceSnapshot,
             "Manual only. Probe MK7 collision flags; look-ahead UNKNOWN; no input injection.");
         menu += new MenuEntry("P008.2a: READ-ONLY sensor preflight", nullptr, IndSensors,
