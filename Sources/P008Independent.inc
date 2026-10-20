@@ -69,7 +69,7 @@ static bool g_indModelDirty=false;
 static unsigned g_indStartCalls=0,g_indDenials=0,g_indSensorFailures=0;
 static u32 g_indRng=0x21AD489Bu;
 static u64 g_indWaitAt=0,g_indNeutralAt=0,g_indStarted=0,g_indLastTick=0;
-static u32 g_indFrameStart=0,g_indFaultStart=0,g_indLimit=30000;
+static u32 g_indFrameStart=0,g_indFaultStart=0,g_indLimit=12000;
 static int g_indLastReason=IND_NONE;
 static IndSensor g_indLastSensor;
 static float g_indRewardMaximum=0,g_indProgressAt=0,g_indLastReward=0;
@@ -132,6 +132,19 @@ bool IndObserve(IndSensor &s,bool requireUnpaused=true) {
             s.faceX=fx/len;s.faceZ=fz/len;s.faceValid=true;
         }
     }
+    // Distinguish kart facing from actual movement direction (side-slip).
+    // Vehicle+0x38 is documented Rigid::m_velocity, not a demo heading.
+    float vx=0,vz=0;
+    if(s.faceValid&&ReadNumber(g_vehicleAddress+0x38,vx)&&
+       ReadNumber(g_vehicleAddress+0x40,vz)&&
+       std::isfinite(vx)&&std::isfinite(vz) &&
+       vx*vx+vz*vz>0.0001f &&
+       vx*vx+vz*vz<100000.0f) {
+        const float travel=std::atan2(vz,vx);
+        const float facing=std::atan2(s.faceZ,s.faceX);
+        s.slip=std::atan2(std::sin(travel-facing),
+                          std::cos(travel-facing));
+    }
     float yaw=0;
     if(ReadNumber(g_vehicleAddress+0xF24,yaw)&&std::fabs(yaw)<100.0f)
         s.yaw=yaw;
@@ -183,7 +196,7 @@ void IndFeatures(const IndSensor &s,u16 out[IND_FEATURES]) {
     out[10]=IndHash(10,speed*3+wall,0);
     out[11]=IndHash(11,face,0);
     out[12]=IndHash(12,s.flags&1u?1:0,0); // reverse progress flag
-    out[13]=IndHash(13,IndBin(std::fabs(s.yaw),3.0f,0,20),0);
+    out[13]=IndHash(13,IndBin(s.slip,2.0f,-7,7),0);
 }
 // Exactly zero reference to human or Nintendo routes.
 float IndQ(u8 action,const u16 f[IND_FEATURES]) {
@@ -455,7 +468,7 @@ void IndSensors(MenuEntry *) {
     std::snprintf(b,sizeof(b),
         "Sample: %s | facing: %s\n"
         "Facing X/Z: %.3f / %.3f\n"
-        "Speed: %.3f | yaw: %.3f\n"
+        "Speed: %.3f | yaw: %.3f slip: %.3f\n"
         "Surface: %s (%lu)\n"
         "Wall: %s (%lu)\n"
         "Progress: %.4f max %.4f lap %lu\n"
@@ -463,7 +476,7 @@ void IndSensors(MenuEntry *) {
         "RADAR: UNAVAILABLE (0/12 rays)\n"
         "Never use dummy ray readings to steer.",
         ok?"VALID":"INVALID",s.faceValid?"VALID":"NOT VERIFIED",
-        s.faceX,s.faceZ,s.speed,s.yaw,
+        s.faceX,s.faceZ,s.speed,s.yaw,s.slip,
         s.surfaceValid?"VALID":"UNKNOWN",
         static_cast<unsigned long>(s.surface),
         s.wallValid?"VALID":"UNKNOWN",
