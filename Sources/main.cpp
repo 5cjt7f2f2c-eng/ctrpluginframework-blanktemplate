@@ -2297,6 +2297,7 @@ namespace CTRPluginFramework
             const u64 callbackTickStarted = g_profilerEnabled
                 ? svcGetSystemTick() : 0;
             const u64 callbackStarted = osGetTime();
+            IndVisionAuditTick();
             PluginMenu *runningMenu = PluginMenu::GetRunningInstance();
             const bool menuOpen = runningMenu && runningMenu->IsOpen();
             if (g_profilerEnabled && !menuOpen)
@@ -2839,6 +2840,10 @@ namespace CTRPluginFramework
             "Check hook frames and native input faults. Physical abort remains available.");
         menu += new MenuEntry("P008.2a: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
+        menu += new MenuEntry("P008.2-S5: START vision audit", nullptr, IndVisionAuditStart,
+            "Manual driving only; capture up to 48 read-only samples over 90 seconds.");
+        menu += new MenuEntry("P008.2-S5: STOP and SAVE report", nullptr, IndVisionAuditSave,
+            "Stop audit and save numbered CSV readiness checklist and evidence.");
         menu += new MenuEntry("P008.2-S4: READ-ONLY candidate vtable", nullptr, IndCollisionVtableSnapshot,
             "Manual only. Read six candidate table words; never execute pointers.");
         menu += new MenuEntry("P008.2-S3: READ-ONLY manager fingerprint", nullptr, IndCollisionManagerFingerprint,
