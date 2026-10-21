@@ -196,7 +196,7 @@ void IndVisionLiveSnapshot(MenuEntry *) {
         classes[d][a]=!h.valid?"---":
             ((h.material&31u)==0?"R00":
             ((h.material&31u)==5?"D05":
-            ((h.material&31u)==6?"D06":"OTH"));
+            ((h.material&31u)==6?"D06":"OTH")));
     }
     char b[430];
     std::snprintf(b,sizeof(b),
