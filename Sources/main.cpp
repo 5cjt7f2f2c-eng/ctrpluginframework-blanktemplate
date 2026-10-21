@@ -1715,6 +1715,7 @@ namespace CTRPluginFramework
         #include "P007bLearning.inc"
         // Independent TD policy, validated-data preflight and model snapshots.
         #include "P008Independent.inc"
+        #include "P0083Vision.inc"
 
         // At most ~10Hz based on elapsed milliseconds, not frame count.
         // Read-only: no file operations and no changes to the MK7 process.
@@ -2840,6 +2841,8 @@ namespace CTRPluginFramework
             "Check hook frames and native input faults. Physical abort remains available.");
         menu += new MenuEntry("P008.2a: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
+        menu += new MenuEntry("P008.3: Geometry self-test", nullptr, IndVisionGeometrySelfTest,
+            "Nine directional ground samples on synthetic triangles; no live game vision yet.");
         menu += new MenuEntry("P008.2-S5: START vision audit", nullptr, IndVisionAuditStart,
             "Manual driving only; capture up to 48 read-only samples over 90 seconds.");
         menu += new MenuEntry("P008.2-S5: STOP and SAVE report", nullptr, IndVisionAuditSave,
