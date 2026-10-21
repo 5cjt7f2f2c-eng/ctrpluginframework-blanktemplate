@@ -885,7 +885,7 @@ void IndVisionAuditSave(MenuEntry *) {
     }
     f.Close();
     std::snprintf(b,sizeof(b),
-        "%s\\nSamples: %u; chain failures: %u.\\n"
+        "%s\nSamples: %u; chain failures: %u.\n"
         "Forward vision BLOCKED pending verified collision query.",
         ok?"Report saved":"SD write FAILED",g_visionCount,g_visionChainFailures);
     MessageBox("P008.2-S5 audit",b)();
