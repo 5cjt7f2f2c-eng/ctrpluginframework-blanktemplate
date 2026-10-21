@@ -9,7 +9,7 @@ include $(DEVKITARM)/3ds_rules
 
 CTRPFLIB	?=	$(DEVKITPRO)/libctrpf
 
-TARGET		:= 	$(notdir $(CURDIR))
+TARGET		:= 	CollieKart
 PLGINFO 	:= 	CTRPluginFramework.plgInfo
 
 BUILD		:= 	Build

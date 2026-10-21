@@ -1,26 +1,23 @@
-Author: Nanquitas
+Author: Collie Kart project (based on CTRPluginFramework Blank Template)
 
-Version: # Plugin version
+Version:
     Major: 0
-    Minor: 7
-    Revision: 2
+    Minor: 0
+    Revision: 82
 
-Targets: # Low TitleId of games which are compatibles with this plugin (0 for all)
+Targets:
 
-Title: CTRPF - Blank Template
+Title: Collie Kart P008.2a
 
-Summary: A CTRPF Plugin, with a lot of tools
+Summary: Track-heading observations and forward-biased learning prototype
 
 Description: |
-  This plugin gives you access to a set of tools to edit your games
-
-  Features:
-    - Memory searcher
-    - Hex Editor
-    - Code creator
-    - Code import from file
-    - Action Replay engine with extra capabilities
-    - Super fast screenshot engine
+    Collie Kart P008.2a experimental independent learner for MK7 USA Rev2.
+    Holds native steering decisions for approximately 390ms while
+    observing every 65ms and maintaining the command watchdog.
+    Adds checkpoint heading as learning features, with diagnostic indices.
+    Full track corridors and next-checkpoint target bearing are NOT implemented.
+    Offline supervised Time Trial testing only; physical override enabled.
 
 Compatibility: Any
 
