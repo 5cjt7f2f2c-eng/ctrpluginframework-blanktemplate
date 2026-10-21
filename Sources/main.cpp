@@ -2839,6 +2839,8 @@ namespace CTRPluginFramework
             "Check hook frames and native input faults. Physical abort remains available.");
         menu += new MenuEntry("P008.2a: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
+        menu += new MenuEntry("P008.2-S4: READ-ONLY candidate vtable", nullptr, IndCollisionVtableSnapshot,
+            "Manual only. Read six candidate table words; never execute pointers.");
         menu += new MenuEntry("P008.2-S3: READ-ONLY manager fingerprint", nullptr, IndCollisionManagerFingerprint,
             "Manual only. Reads four opaque manager words; no collision queries.");
         menu += new MenuEntry("P008.2-S2: READ-ONLY collision manager", nullptr, IndCollisionManagerSnapshot,
