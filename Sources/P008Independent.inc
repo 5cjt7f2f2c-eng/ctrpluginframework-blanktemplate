@@ -660,6 +660,57 @@ void IndCollisionManagerSnapshot(MenuEntry *) {
         valid?"YES":"NO");
     MessageBox("P008.2-S2 manager pointer",msg)();
 }
+// S3: Read-only manager memory fingerprint. Does not interpret or call code.
+void IndCollisionManagerFingerprint(MenuEntry *) {
+    if (g_indPhase==IND_WAIT || g_indPhase==IND_DRIVE ||
+        g_aiPhase==AI_RUNNING || g_aiPhase==AI_COUNTDOWN) {
+        MessageBox("S3 locked","Stop AI/guided driving first.")();
+        return;
+    }
+    if (!g_verified || Process::GetTitleID()!=MK7_USA) {
+        MessageBox("S3 unavailable","MK7 USA only.")();
+        return;
+    }
+    u32 root=0,scene=0,encoded=0,engine=0,list=0,mgr=0;
+    unsigned stage=0;
+    if (!ReadPointer(ROOTSYSTEM_USA_REV2+4,root)) stage=1;
+    else if (!ReadPointer(root+4,scene)) stage=2;
+    else if (!ReadWord(scene+0x1E4,encoded)) stage=3;
+    else {
+        engine=encoded^ENGINE_XOR;
+        if (!PlausibleAddress(engine) ||
+            !Process::CheckAddress(engine+0x1C,MEMPERM_READ))stage=4;
+        else if (!ReadPointer(engine+0x1C,list))stage=5;
+        else if (!ReadPointer(list+0x08,mgr))stage=6;
+    }
+    u32 words[4]={0,0,0,0};
+    bool ok[4]={false,false,false,false};
+    if (!stage) {
+        for (unsigned i=0;i<4;++i) {
+            const u32 addr=mgr+i*4;
+            ok[i]=Process::CheckAddress(addr,MEMPERM_READ) &&
+                ReadWord(addr,words[i]);
+        }
+    }
+    char msg[420];
+    std::snprintf(msg,sizeof(msg),
+        "Chain: %s (stage %u)\\n"
+        "Manager: 0x%08lX\\n"
+        "+00: %s 0x%08lX\\n"
+        "+04: %s 0x%08lX\\n"
+        "+08: %s 0x%08lX\\n"
+        "+0C: %s 0x%08lX\\n"
+        "Opaque words; NOT validated fields.\\n"
+        "No collision calls or writes.\\n"
+        "LOOK-AHEAD: UNKNOWN.",
+        stage?"FAILED":"RESOLVED",stage,
+        static_cast<unsigned long>(mgr),
+        ok[0]?"READ":"INVALID",static_cast<unsigned long>(words[0]),
+        ok[1]?"READ":"INVALID",static_cast<unsigned long>(words[1]),
+        ok[2]?"READ":"INVALID",static_cast<unsigned long>(words[2]),
+        ok[3]?"READ":"INVALID",static_cast<unsigned long>(words[3]));
+    MessageBox("P008.2-S3 manager fingerprint",msg)();
+}
 void IndReport(MenuEntry *) {
     char b[280];
     std::string msg;
