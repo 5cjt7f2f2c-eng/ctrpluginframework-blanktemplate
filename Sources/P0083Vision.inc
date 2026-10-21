@@ -98,7 +98,12 @@ void IndVisionGeometrySelfTest(MenuEntry *) {
 
 // P008.3b: user-provided Toad Circuit geometry asset, NOT live KCL memory.
 // Fixed versioned format: CKV3, u32 version,count,crc32; records: 9*f32,u32.
-static std::vector<CKVisionTriangle> g_ckCourseTriangles;
+static CKVisionTriangle *g_ckCourseTriangles=nullptr;
+static unsigned g_ckCourseCount=0;
+static void CKVisionRelease() {
+    if(g_ckCourseTriangles)std::free(g_ckCourseTriangles);
+    g_ckCourseTriangles=nullptr;g_ckCourseCount=0;
+}
 static bool g_ckCourseReady=false;
 static u32 CKVisionCrc(const unsigned char *p,unsigned n) {
     u32 crc=0xFFFFFFFFu;
@@ -122,7 +127,7 @@ void IndVisionLoadCourse(MenuEntry *) {
        g_aiPhase==AI_RUNNING||g_aiPhase==AI_COUNTDOWN) {
         MessageBox("Vision loader locked","Stop all automated driving first.")();return;
     }
-    g_ckCourseReady=false;g_ckCourseTriangles.clear();
+    g_ckCourseReady=false;CKVisionRelease();
     const char *path="/CollieKart/ToadCircuit_CKV3.bin";
     File f;
     if(File::Open(f,path,File::READ)!=File::SUCCESS) {
@@ -146,16 +151,16 @@ void IndVisionLoadCourse(MenuEntry *) {
        size!=16u+static_cast<u64>(count)*40u) {
         f.Close();MessageBox("Invalid vision file","Header or triangle count invalid.")();return;
     }
-    // Keep only the decoded geometry (~222KB for Toad Circuit).
-    // Do not reserve() or push_back() in a loop without an exception boundary.
-    try {
-        g_ckCourseTriangles.resize(count);
-    } catch(...) {
-        f.Close();g_ckCourseTriangles.clear();
+    // Explicit checked allocation: project builds with -fno-exceptions.
+    g_ckCourseTriangles=static_cast<CKVisionTriangle*>(std::malloc(
+        static_cast<size_t>(count)*sizeof(CKVisionTriangle)));
+    if(!g_ckCourseTriangles) {
+        f.Close();
         MessageBox("Vision memory unavailable",
             "Not enough plugin heap for course geometry. No scan attempted.")();
         return;
     }
+    g_ckCourseCount=count;
     u32 crc=0xFFFFFFFFu;
     unsigned char batch[40*32];
     u32 index=0;
@@ -186,7 +191,7 @@ void IndVisionLoadCourse(MenuEntry *) {
     }
     f.Close();
     if(!good || ~crc!=CKVisionU32(header+12)) {
-        g_ckCourseTriangles.clear();
+        CKVisionRelease();
         MessageBox("Vision geometry rejected",
             "Read error, invalid coordinates or checksum mismatch.")();
         return;
@@ -195,7 +200,7 @@ void IndVisionLoadCourse(MenuEntry *) {
     char b[160];std::snprintf(b,sizeof(b),
        "Loaded %lu course triangles. CRC verified.\n"
        "Experimental MK7 geometry; surface labels not validated.",
-       static_cast<unsigned long>(g_ckCourseTriangles.size()));
+       static_cast<unsigned long>(g_ckCourseCount));
     MessageBox("P008.3b geometry loaded",b)();
 }
 void IndVisionLiveSnapshot(MenuEntry *) {
@@ -217,8 +222,8 @@ void IndVisionLiveSnapshot(MenuEntry *) {
        !CKVisionFinite(x)||!CKVisionFinite(y)||!CKVisionFinite(z)) {
         MessageBox("Vision unavailable","Live position/heading invalid.")();return;
     }
-    const CKVisionScan scan=CKVisionLook(g_ckCourseTriangles.data(),
-        static_cast<unsigned>(g_ckCourseTriangles.size()),x,z,y,fx,fz);
+    const CKVisionScan scan=CKVisionLook(g_ckCourseTriangles,
+        g_ckCourseCount,x,z,y,fx,fz);
     const char* classes[3][3];
     for(unsigned d=0;d<3;++d)for(unsigned a=0;a<3;++a) {
         const CKVisionHit &h=scan.hit[d][a];
