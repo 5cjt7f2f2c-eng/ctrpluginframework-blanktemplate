@@ -133,32 +133,63 @@ void IndVisionLoadCourse(MenuEntry *) {
     if(size<56 || size>400016 || (size-16)%40!=0) {
         f.Close();MessageBox("Invalid vision file","File size invalid.")();return;
     }
-    std::vector<unsigned char> bytes(static_cast<unsigned>(size));
-    const bool read=f.Read(bytes.data(),static_cast<u32>(size))==File::SUCCESS;
-    f.Close();
-    const u32 count=CKVisionU32(bytes.data()+8);
-    if(!read||std::memcmp(bytes.data(),"CKV3",4)!=0||
-       CKVisionU32(bytes.data()+4)!=1 || count==0 || count>10000 ||
-       size!=16u+static_cast<u64>(count)*40u ||
-       CKVisionCrc(bytes.data()+16,static_cast<unsigned>(size-16))!=
-           CKVisionU32(bytes.data()+12)) {
-        MessageBox("Invalid vision file","Header, count or checksum mismatch.")();return;
+    // P008.3c: no duplicate full-file allocation. Stream in bounded batches.
+    // A 3DS plugin has limited heap headroom; catch allocation failures rather
+    // than allowing std::terminate -> abort() / svcBreak.
+    unsigned char header[16]={};
+    if(f.Read(header,16)!=File::SUCCESS) {
+        f.Close();MessageBox("Vision file read failed","Cannot read header.")();return;
     }
-    g_ckCourseTriangles.reserve(count);
-    for(u32 i=0;i<count;++i) {
-        const unsigned char *p=bytes.data()+16+i*40;
-        CKVisionTriangle t;
-        t.a={CKVisionF32(p),CKVisionF32(p+4),CKVisionF32(p+8)};
-        t.b={CKVisionF32(p+12),CKVisionF32(p+16),CKVisionF32(p+20)};
-        t.c={CKVisionF32(p+24),CKVisionF32(p+28),CKVisionF32(p+32)};
-        t.material=static_cast<u16>(CKVisionU32(p+36)&65535u);
-        if(!CKVisionFinite(t.a.x)||!CKVisionFinite(t.a.y)||!CKVisionFinite(t.a.z)||
-           !CKVisionFinite(t.b.x)||!CKVisionFinite(t.b.y)||!CKVisionFinite(t.b.z)||
-           !CKVisionFinite(t.c.x)||!CKVisionFinite(t.c.y)||!CKVisionFinite(t.c.z)) {
-            g_ckCourseTriangles.clear();
-            MessageBox("Invalid vision file","Nonfinite triangle coordinates.")();return;
+    const u32 count=CKVisionU32(header+8);
+    if(std::memcmp(header,"CKV3",4)!=0||
+       CKVisionU32(header+4)!=1 || count==0 || count>8192 ||
+       size!=16u+static_cast<u64>(count)*40u) {
+        f.Close();MessageBox("Invalid vision file","Header or triangle count invalid.")();return;
+    }
+    // Keep only the decoded geometry (~222KB for Toad Circuit).
+    // Do not reserve() or push_back() in a loop without an exception boundary.
+    try {
+        g_ckCourseTriangles.resize(count);
+    } catch(...) {
+        f.Close();g_ckCourseTriangles.clear();
+        MessageBox("Vision memory unavailable",
+            "Not enough plugin heap for course geometry. No scan attempted.")();
+        return;
+    }
+    u32 crc=0xFFFFFFFFu;
+    unsigned char batch[40*32];
+    u32 index=0;
+    bool good=true;
+    while(index<count && good) {
+        const u32 n=(count-index)<32?(count-index):32;
+        const u32 len=n*40;
+        if(f.Read(batch,len)!=File::SUCCESS) {good=false;break;}
+        for(u32 k=0;k<len;++k) {
+            crc^=batch[k];
+            for(unsigned j=0;j<8;++j)
+                crc=(crc>>1)^((crc&1u)?0xEDB88320u:0u);
         }
-        g_ckCourseTriangles.push_back(t);
+        for(u32 j=0;j<n;++j) {
+            const unsigned char *p=batch+j*40;
+            CKVisionTriangle &t=g_ckCourseTriangles[index+j];
+            t.a={CKVisionF32(p),CKVisionF32(p+4),CKVisionF32(p+8)};
+            t.b={CKVisionF32(p+12),CKVisionF32(p+16),CKVisionF32(p+20)};
+            t.c={CKVisionF32(p+24),CKVisionF32(p+28),CKVisionF32(p+32)};
+            t.material=static_cast<u16>(CKVisionU32(p+36)&65535u);
+            if(!CKVisionFinite(t.a.x)||!CKVisionFinite(t.a.y)||!CKVisionFinite(t.a.z)||
+               !CKVisionFinite(t.b.x)||!CKVisionFinite(t.b.y)||!CKVisionFinite(t.b.z)||
+               !CKVisionFinite(t.c.x)||!CKVisionFinite(t.c.y)||!CKVisionFinite(t.c.z)) {
+                good=false;break;
+            }
+        }
+        index+=n;
+    }
+    f.Close();
+    if(!good || ~crc!=CKVisionU32(header+12)) {
+        g_ckCourseTriangles.clear();
+        MessageBox("Vision geometry rejected",
+            "Read error, invalid coordinates or checksum mismatch.")();
+        return;
     }
     g_ckCourseReady=true;
     char b[160];std::snprintf(b,sizeof(b),
