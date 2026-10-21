@@ -2841,6 +2841,10 @@ namespace CTRPluginFramework
             "Check hook frames and native input faults. Physical abort remains available.");
         menu += new MenuEntry("P008.2a: Cycle driver MODE", nullptr, IndCycleMode,
             "MANUAL / GUIDED / TRAIN / EVALUATE. Mode changes only while idle.");
+        menu += new MenuEntry("P008.3b: LOAD Toad Circuit geometry", nullptr, IndVisionLoadCourse,
+            "Load checked KCL-derived triangles from /CollieKart/ToadCircuit_CKV3.bin.");
+        menu += new MenuEntry("P008.3b: LIVE forward scan", nullptr, IndVisionLiveSnapshot,
+            "Read-only 3x3 real course geometry scan from current kart pose.");
         menu += new MenuEntry("P008.3: Geometry self-test", nullptr, IndVisionGeometrySelfTest,
             "Nine directional ground samples on synthetic triangles; no live game vision yet.");
         menu += new MenuEntry("P008.2-S5: START vision audit", nullptr, IndVisionAuditStart,
