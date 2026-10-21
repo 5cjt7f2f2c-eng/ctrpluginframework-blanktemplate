@@ -1,4 +1,4 @@
-// P008.3: geometry-backed vision mathematics (no unknown MK7 calls).
+// P008.3d: geometry-backed vision mathematics (no unknown MK7 calls).
 // Backend-neutral: triangles must be supplied by a separately validated KCL decoder.
 // This file intentionally DOES NOT treat fabricated geometry as live game vision.
 struct CKVisionPoint { float x,y,z; };
