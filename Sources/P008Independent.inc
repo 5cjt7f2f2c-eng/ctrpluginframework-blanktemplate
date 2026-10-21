@@ -711,6 +711,57 @@ void IndCollisionManagerFingerprint(MenuEntry *) {
         ok[3]?"READ":"INVALID",static_cast<unsigned long>(words[3]));
     MessageBox("P008.2-S3 manager fingerprint",msg)();
 }
+// S4: Read-only candidate vtable entries; pointers are not callable proof.
+void IndCollisionVtableSnapshot(MenuEntry *) {
+    if (g_indPhase==IND_WAIT || g_indPhase==IND_DRIVE ||
+        g_aiPhase==AI_RUNNING || g_aiPhase==AI_COUNTDOWN) {
+        MessageBox("S4 locked","Stop AI/guided driving first.")();return;
+    }
+    if (!g_verified || Process::GetTitleID()!=MK7_USA) {
+        MessageBox("S4 unavailable","MK7 USA only.")();return;
+    }
+    u32 root=0,scene=0,encoded=0,engine=0,list=0,mgr=0,vt=0;
+    unsigned stage=0;
+    if (!ReadPointer(ROOTSYSTEM_USA_REV2+4,root))stage=1;
+    else if (!ReadPointer(root+4,scene))stage=2;
+    else if (!ReadWord(scene+0x1E4,encoded))stage=3;
+    else {
+        engine=encoded^ENGINE_XOR;
+        if (!PlausibleAddress(engine) ||
+            !Process::CheckAddress(engine+0x1C,MEMPERM_READ))stage=4;
+        else if (!ReadPointer(engine+0x1C,list))stage=5;
+        else if (!ReadPointer(list+0x08,mgr))stage=6;
+        else if (!ReadPointer(mgr,vt))stage=7;
+    }
+    u32 values[6]={0,0,0,0,0,0};
+    bool valid[6]={false,false,false,false,false,false};
+    if (!stage)for(unsigned i=0;i<6;++i) {
+        u32 addr=vt+i*4;
+        valid[i]=Process::CheckAddress(addr,MEMPERM_READ) &&
+            ReadWord(addr,values[i]);
+    }
+    char msg[520];
+    std::snprintf(msg,sizeof(msg),
+        "Chain: %s (stage %u)\n"
+        "Candidate table: 0x%08lX\n"
+        "[0] %s 0x%08lX\n"
+        "[1] %s 0x%08lX\n"
+        "[2] %s 0x%08lX\n"
+        "[3] %s 0x%08lX\n"
+        "[4] %s 0x%08lX\n"
+        "[5] %s 0x%08lX\n"
+        "UNVERIFIED pointers, not functions.\n"
+        "NO calls/writes; LOOK-AHEAD UNKNOWN.",
+        stage?"FAILED":"RESOLVED",stage,
+        static_cast<unsigned long>(vt),
+        valid[0]?"READ":"INVALID",static_cast<unsigned long>(values[0]),
+        valid[1]?"READ":"INVALID",static_cast<unsigned long>(values[1]),
+        valid[2]?"READ":"INVALID",static_cast<unsigned long>(values[2]),
+        valid[3]?"READ":"INVALID",static_cast<unsigned long>(values[3]),
+        valid[4]?"READ":"INVALID",static_cast<unsigned long>(values[4]),
+        valid[5]?"READ":"INVALID",static_cast<unsigned long>(values[5]));
+    MessageBox("P008.2-S4 candidate vtable",msg)();
+}
 void IndReport(MenuEntry *) {
     char b[280];
     std::string msg;
