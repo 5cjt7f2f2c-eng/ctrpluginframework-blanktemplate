@@ -694,14 +694,14 @@ void IndCollisionManagerFingerprint(MenuEntry *) {
     }
     char msg[420];
     std::snprintf(msg,sizeof(msg),
-        "Chain: %s (stage %u)\\n"
-        "Manager: 0x%08lX\\n"
-        "+00: %s 0x%08lX\\n"
-        "+04: %s 0x%08lX\\n"
-        "+08: %s 0x%08lX\\n"
-        "+0C: %s 0x%08lX\\n"
-        "Opaque words; NOT validated fields.\\n"
-        "No collision calls or writes.\\n"
+        "Chain: %s (stage %u)\n"
+        "Manager: 0x%08lX\n"
+        "+00: %s 0x%08lX\n"
+        "+04: %s 0x%08lX\n"
+        "+08: %s 0x%08lX\n"
+        "+0C: %s 0x%08lX\n"
+        "Opaque words; NOT validated fields.\n"
+        "No collision calls or writes.\n"
         "LOOK-AHEAD: UNKNOWN.",
         stage?"FAILED":"RESOLVED",stage,
         static_cast<unsigned long>(mgr),
