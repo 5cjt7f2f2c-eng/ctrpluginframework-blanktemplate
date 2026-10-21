@@ -762,6 +762,134 @@ void IndCollisionVtableSnapshot(MenuEntry *) {
         valid[5]?"READ":"INVALID",static_cast<unsigned long>(values[5]));
     MessageBox("P008.2-S4 candidate vtable",msg)();
 }
+
+// S5 vision-readiness audit: bounded, read-only, manual-driving sampling.
+// Deliberately does not claim a callable collision ABI or valid look-ahead.
+struct VisionAuditSample {
+    u32 manager=0, table=0, words[6]={}, contact=0;
+    u16 raw=0;
+    u8 chain=0, tableReads=0, contactValid=0;
+    u32 elapsedMs=0;
+};
+static VisionAuditSample g_visionSamples[48];
+static unsigned g_visionCount=0,g_visionChainFailures=0;
+static bool g_visionActive=false;
+static u64 g_visionStarted=0,g_visionLast=0;
+void IndVisionAuditTick() {
+    if (!g_visionActive)return;
+    const u64 now=osGetTime();
+    if (g_indPhase==IND_WAIT || g_indPhase==IND_DRIVE ||
+        g_aiPhase==AI_RUNNING || g_aiPhase==AI_COUNTDOWN ||
+        !g_verified || Process::GetTitleID()!=MK7_USA) {
+        g_visionActive=false;return;
+    }
+    if(g_visionCount>=48 || now-g_visionStarted>=90000) {
+        g_visionActive=false;return;
+    }
+    if(g_visionLast && now-g_visionLast<1500)return;
+    g_visionLast=now;
+    VisionAuditSample &a=g_visionSamples[g_visionCount++];
+    a=VisionAuditSample{};
+    a.elapsedMs=static_cast<u32>(now-g_visionStarted);
+    u32 root=0,scene=0,encoded=0,engine=0,list=0;
+    if(ReadPointer(ROOTSYSTEM_USA_REV2+4,root) &&
+       ReadPointer(root+4,scene) &&
+       ReadWord(scene+0x1E4,encoded)) {
+        engine=encoded^ENGINE_XOR;
+        if(PlausibleAddress(engine) &&
+           Process::CheckAddress(engine+0x1C,MEMPERM_READ) &&
+           ReadPointer(engine+0x1C,list) &&
+           ReadPointer(list+0x08,a.manager)) {
+            a.chain=1;
+            if(ReadPointer(a.manager,a.table)) {
+                for(unsigned i=0;i<6;++i) {
+                    if(Process::CheckAddress(a.table+i*4,MEMPERM_READ) &&
+                       ReadWord(a.table+i*4,a.words[i]))
+                        ++a.tableReads;
+                }
+            }
+        }
+    }
+    if(!a.chain)++g_visionChainFailures;
+    u32 contactObject=0;
+    if(ReadPointer(0x0065C584,contactObject) &&
+       ReadWord(contactObject,a.contact) &&
+       Process::CheckAddress(contactObject+4,MEMPERM_READ) &&
+       Process::Read16(contactObject+4,a.raw))a.contactValid=1;
+}
+void IndVisionAuditStart(MenuEntry *) {
+    if(g_indPhase==IND_WAIT || g_indPhase==IND_DRIVE ||
+       g_aiPhase==AI_RUNNING || g_aiPhase==AI_COUNTDOWN ||
+       !g_verified || Process::GetTitleID()!=MK7_USA) {
+        MessageBox("Vision audit locked","MK7 USA manual driving only.")();return;
+    }
+    g_visionActive=false;
+    g_visionCount=0;g_visionChainFailures=0;
+    g_visionStarted=osGetTime();g_visionLast=0;
+    g_visionActive=true;
+    MessageBox("S5 audit recording",
+       "Close menu and drive MANUALLY. Up to 48 samples over 90 seconds. "
+       "Then select SAVE audit. No controller injection.")();
+}
+void IndVisionAuditSave(MenuEntry *) {
+    g_visionActive=false;
+    if(!g_visionCount) {
+        MessageBox("No audit samples","Start audit, close menu, then drive manually.")();
+        return;
+    }
+    if(Directory::IsExists("/CollieKart")!=Directory::SUCCESS)
+        Directory::Create("/CollieKart");
+    char path[90];bool found=false;
+    for(unsigned i=1;i<=999;++i) {
+        std::snprintf(path,sizeof(path),"/CollieKart/vision_audit_%03u.csv",i);
+        if(File::Exists(path)==0){found=true;break;}
+    }
+    if(!found || File::Create(path)!=File::SUCCESS) {
+        MessageBox("Audit save failed","No free report filename or SD write failed.")();return;
+    }
+    File f;
+    if(File::Open(f,path,File::WRITE|File::TRUNCATE)!=File::SUCCESS) {
+        MessageBox("Audit save failed","Cannot open report.")();return;
+    }
+    bool ok=true;
+    auto line=[&](const char *v){if(ok)ok=f.WriteLine(v)==File::SUCCESS;};
+    line("Collie Kart P008.2-S5 Vision Readiness Audit");
+    line("TEST,STATE,EVIDENCE_OR_DEPENDENCY");
+    line("CONTACT_SURFACE,OBSERVED,S1 previously hardware verified; see raw samples");
+    line("MANAGER_CHAIN,OBSERVED,S2-S4 previously hardware verified; see sample chain flags");
+    line("CANDIDATE_TABLE,UNVERIFIED,Read-only words are not proven functions");
+    line("QUERY_ABI,BLOCKED,Needs validated USA Rev2 function signature or loaded KCL parser");
+    line("FORWARD_SAMPLE,BLOCKED,Depends on safe remote collision query");
+    line("ROAD_EDGE,BLOCKED,Depends on forward and lateral samples");
+    line("MULTI_ANGLE,BLOCKED,Depends on safe remote collision query");
+    line("RANGE_CYCLING,BLOCKED,Depends on safe remote collision query");
+    line("SENSOR_ACCURACY,NOT_RUN,Needs ground truth forward samples");
+    line("AI_INTEGRATION,BLOCKED,Needs validated sensor accuracy and timing");
+    line("SAMPLE,time_ms,chain,manager,table,table_words_read,contact_valid,contact_flags,contact_raw,vt0,vt1,vt2,vt3,vt4,vt5");
+    char b[350];
+    for(unsigned i=0;i<g_visionCount;++i) {
+        const VisionAuditSample &a=g_visionSamples[i];
+        std::snprintf(b,sizeof(b),
+            "DATA,%lu,%u,%08lX,%08lX,%u,%u,%08lX,%04X,%08lX,%08lX,%08lX,%08lX,%08lX,%08lX",
+            static_cast<unsigned long>(a.elapsedMs),a.chain,
+            static_cast<unsigned long>(a.manager),
+            static_cast<unsigned long>(a.table),a.tableReads,a.contactValid,
+            static_cast<unsigned long>(a.contact),a.raw,
+            static_cast<unsigned long>(a.words[0]),
+            static_cast<unsigned long>(a.words[1]),
+            static_cast<unsigned long>(a.words[2]),
+            static_cast<unsigned long>(a.words[3]),
+            static_cast<unsigned long>(a.words[4]),
+            static_cast<unsigned long>(a.words[5]));
+        line(b);
+    }
+    f.Close();
+    std::snprintf(b,sizeof(b),
+        "%s\\nSamples: %u; chain failures: %u.\\n"
+        "Forward vision BLOCKED pending verified collision query.",
+        ok?"Report saved":"SD write FAILED",g_visionCount,g_visionChainFailures);
+    MessageBox("P008.2-S5 audit",b)();
+}
 void IndReport(MenuEntry *) {
     char b[280];
     std::string msg;
